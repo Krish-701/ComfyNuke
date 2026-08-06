@@ -1,0 +1,28 @@
+# =============================================================================
+# PASTE INTO NUKE SCRIPT EDITOR (artists) — only this
+# =============================================================================
+# 1) Mount or use UNC path to the Ubuntu share that holds ComfyNuke.
+# 2) Edit COMFYNUKE_ROOT / path below once per studio.
+# 3) Run. Menu appears: Nuke > ComfyUI
+# =============================================================================
+
+import os
+
+# --- STUDIO SETTINGS (change once) ---
+os.environ["COMFYNUKE_ROOT"] = r"\\192.168.91.13\ComfyNuke"
+os.environ["COMFYNUKE_SERVER"] = "http://192.168.91.13:8188"
+# optional: where results save on THIS PC
+# os.environ["COMFYNUKE_OUT"] = r"C:\Users\Public\ComfyNuke_out"
+
+exec(
+    open(
+        os.path.join(os.environ["COMFYNUKE_ROOT"], "nuke", "launch.py"),
+        encoding="utf-8",
+    ).read()
+)
+
+# --- Linux Nuke example ---
+# import os
+# os.environ["COMFYNUKE_ROOT"] = "/mnt/comfynuke"
+# os.environ["COMFYNUKE_SERVER"] = "http://192.168.91.13:8188"
+# exec(open("/mnt/comfynuke/nuke/launch.py", encoding="utf-8").read())

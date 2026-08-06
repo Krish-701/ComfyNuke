@@ -2,24 +2,28 @@
 Nuke panel for ComfyUI Edit_Image (PNG RGBA + crop/inpaint/stitch).
 
 Always uploads PNG with alpha (never raw JPG).
-Fixed temp files (overwrite each run) — no spam in %TEMP%.
+Per-session temp files under %TEMP%/comfy_nuke/<host>_<pid>/ (multi-user safe).
 
 Workflow default: Edit_Image_v05.json
   LoadImage → mask → InpaintCrop → LLM (node 289 user text) → Qwen edit → Stitch → Save
 
-LOAD:
-  exec(open(r"D:/AI-Dev/Krish-ComfyNuke/nuke/load_in_nuke.py", encoding="utf-8").read())
+LOAD (artists — multi-user hub):
+  exec(open(r"//YOUR_SERVER/ComfyNuke/nuke/launch.py", encoding="utf-8").read())
+or local:
+  exec(open(r"D:/AI-Dev/Krish-ComfyNuke/nuke/launch.py", encoding="utf-8").read())
 """
 
 from __future__ import annotations
 
+import json
 import os
+import socket
 import sys
 import tempfile
 import uuid
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths + multi-user studio config
 # ---------------------------------------------------------------------------
 def _this_file():
     try:
@@ -28,29 +32,99 @@ def _this_file():
         return r"D:/AI-Dev/Krish-ComfyNuke/nuke/ComfyEdit.py"
 
 
+def _load_studio_config(repo_root):
+    """
+    Resolve ComfyUI URL and options for multi-user studio.
+
+    Order (first hit wins for each key):
+      1) env COMFYNUKE_SERVER / COMFYNUKE_OUT
+      2) studio_config.json in repo root (shared from Ubuntu)
+      3) %USERPROFILE%/.comfynuke/config.json or ~/.comfynuke/config.json
+      4) built-in defaults
+    """
+    cfg = {
+        "server": "http://192.168.91.13:8188",
+        "output_dir": "",
+        "studio_name": "ComfyNuke",
+    }
+    candidates = []
+    env_root = (os.environ.get("COMFYNUKE_ROOT") or "").strip()
+    if env_root:
+        candidates.append(os.path.join(env_root, "studio_config.json"))
+    candidates.append(os.path.join(repo_root, "studio_config.json"))
+    home = os.path.expanduser("~")
+    candidates.append(os.path.join(home, ".comfynuke", "config.json"))
+    # Windows user profile
+    up = os.environ.get("USERPROFILE") or ""
+    if up:
+        candidates.append(os.path.join(up, ".comfynuke", "config.json"))
+
+    for path in candidates:
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                cfg.update({k: data[k] for k in data if data[k] not in (None, "")})
+                cfg["_config_path"] = path
+                break
+        except Exception:
+            continue
+
+    env_server = (os.environ.get("COMFYNUKE_SERVER") or "").strip()
+    if env_server:
+        cfg["server"] = env_server
+    env_out = (os.environ.get("COMFYNUKE_OUT") or "").strip()
+    if env_out:
+        cfg["output_dir"] = env_out
+    return cfg
+
+
 _THIS_DIR = os.path.dirname(_this_file())
-REPO_ROOT = os.path.normpath(os.path.join(_THIS_DIR, ".."))
+# Allow bootstrap to pin repo root (network share / Ubuntu mount)
+_env_root = (os.environ.get("COMFYNUKE_ROOT") or "").strip()
+if _env_root and os.path.isdir(_env_root):
+    REPO_ROOT = os.path.normpath(_env_root)
+    _THIS_DIR = os.path.join(REPO_ROOT, "nuke")
+else:
+    REPO_ROOT = os.path.normpath(os.path.join(_THIS_DIR, ".."))
+
 CLIENT_DIR = os.path.join(REPO_ROOT, "client")
+_STUDIO = _load_studio_config(REPO_ROOT)
+
 DEFAULT_WORKFLOW = os.path.join(REPO_ROOT, "Edit_Image_v05.json").replace("\\", "/")
 IMAGE_GEN_WORKFLOW = os.path.join(REPO_ROOT, "Image_generation_v01.json").replace(
     "\\", "/"
 )
 I2V_WORKFLOW = os.path.join(REPO_ROOT, "video_minimax_h3_i2v.json").replace("\\", "/")
-DEFAULT_SERVER = "http://192.168.91.13:8188"
-DEFAULT_OUT = os.path.join(REPO_ROOT, "client", "out").replace("\\", "/")
+DEFAULT_SERVER = str(_STUDIO.get("server") or "http://192.168.91.13:8188").rstrip("/")
 
-# Fixed temp files — overwritten every run (no UUID spam)
-TEMP_DIR = os.path.join(tempfile.gettempdir(), "comfy_nuke")
+# Downloads: prefer local per-user folder (never write into shared server tree)
+_host = socket.gethostname().replace(" ", "_")
+_pid = str(os.getpid())
+if _STUDIO.get("output_dir"):
+    DEFAULT_OUT = str(_STUDIO["output_dir"]).replace("\\", "/")
+else:
+    DEFAULT_OUT = os.path.join(
+        os.path.expanduser("~"), "ComfyNuke_out", _host
+    ).replace("\\", "/")
+
+# Per Nuke process temp (multi-user / multi-Nuke safe)
+TEMP_DIR = os.path.join(tempfile.gettempdir(), "comfy_nuke", "%s_%s" % (_host, _pid))
 TEMP_PLATE_SRGB = os.path.join(TEMP_DIR, "plate_srgb.png")     # RGB display-referred
 TEMP_INPUT_RGBA = os.path.join(TEMP_DIR, "input_rgba.png")     # RGB + mask alpha → Comfy
 TEMP_ALPHA_PREVIEW = os.path.join(TEMP_DIR, "alpha_preview.png")  # grayscale A for QC
 TEMP_ROTO_WRITE = os.path.join(TEMP_DIR, "roto_write_rgba.png")   # raw Nuke Write
 TEMP_MASK_LUMA = os.path.join(TEMP_DIR, "mask_luma.png")          # Roto alpha as gray RGB
 TEMP_I2V_FRAME = os.path.join(TEMP_DIR, "i2v_frame.png")          # current frame for i2v
-# Reference style (user's known-good alpha)
+# Reference style (user's known-good alpha) — optional local QC only
 REF_ALPHA_EXAMPLE = r"D:\bear-alpha.png"
 
-# True while export+Comfy job is active (one at a time)
+STUDIO_NAME = str(_STUDIO.get("studio_name") or "ComfyNuke")
+STUDIO_CONFIG_PATH = _STUDIO.get("_config_path") or ""
+
+# True while export+Comfy job is active (one at a time PER Nuke session)
 _BG_JOB_ACTIVE = False
 # Active QTimer poll state (main-thread only — no Python threads)
 _POLL_STATE = None  # type: ignore
@@ -59,6 +133,8 @@ if CLIENT_DIR not in sys.path:
     sys.path.insert(0, CLIENT_DIR)
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 try:
     import nuke  # type: ignore
@@ -2996,7 +3072,9 @@ def register_menu():
     m.addCommand("Image to Video...", show_image_to_video_panel)
     m.addCommand("Ping Server", ping_server)
     nuke.tprint(
-        "[ComfyEdit] Menu OK — Edit Image / Image Gen / Image to Video / Ping"
+        "[ComfyEdit] Menu OK — Edit Image / Image Gen / Image to Video / Ping | "
+        "server=%s root=%s"
+        % (DEFAULT_SERVER, REPO_ROOT)
     )
 
 

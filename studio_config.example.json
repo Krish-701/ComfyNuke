@@ -1,0 +1,6 @@
+{
+  "studio_name": "ComfyNuke Studio",
+  "server": "http://192.168.91.13:8188",
+  "output_dir": "",
+  "notes": "Copy to studio_config.json on the Ubuntu share. Leave output_dir empty to use ~/ComfyNuke_out/<hostname> on each artist PC. Env overrides: COMFYNUKE_SERVER, COMFYNUKE_ROOT, COMFYNUKE_OUT."
+}
