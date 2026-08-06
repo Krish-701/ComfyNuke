@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.env
+.env.*
+
+# Nuke / editor
+*.nk~
+*.autosave
+.idea/
+.vscode/
+*.swp
+
+# Comfy/Nuke runtime outputs (large; regenerate locally)
+client/out/
+**/out/*.png
+**/out/*.exr
+**/out/*.mp4
+**/out/*.mov
+**/out/*.webm
+last_comfy_result.*
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Local secrets / machine config (keep example only)
+client/config.json
+*.local.json

@@ -1,0 +1,207 @@
+{
+  "29": {
+    "inputs": {
+      "filename_prefix": "Krea2_turbo",
+      "images": [
+        "54",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "51": {
+    "inputs": {
+      "text": [
+        "76",
+        0
+      ],
+      "clip": [
+        "55",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "52": {
+    "inputs": {
+      "width": 1920,
+      "height": 1080,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image"
+    }
+  },
+  "53": {
+    "inputs": {
+      "seed": 165709477649536,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "70",
+        0
+      ],
+      "positive": [
+        "51",
+        0
+      ],
+      "negative": [
+        "57",
+        0
+      ],
+      "latent_image": [
+        "52",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "54": {
+    "inputs": {
+      "samples": [
+        "53",
+        0
+      ],
+      "vae": [
+        "56",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "55": {
+    "inputs": {
+      "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+      "type": "krea2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "56": {
+    "inputs": {
+      "vae_name": "Qwen_Image-VAE.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "57": {
+    "inputs": {
+      "conditioning": [
+        "51",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "ConditioningZeroOut"
+    }
+  },
+  "70": {
+    "inputs": {
+      "unet_name": "Krea2/Krea-2-turbo.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "71": {
+    "inputs": {
+      "model_name": "qwen2.5vl:7b",
+      "base_url": "http://127.0.0.0:11434/",
+      "api_key": "",
+      "is_ollama": true,
+      "Get Models": "Get Models"
+    },
+    "class_type": "LLM_api_loader",
+    "_meta": {
+      "title": "☁️API LLM Loader"
+    }
+  },
+  "72": {
+    "inputs": {
+      "text_0": "\"handheld snapshot of a wide mountain landscape, with clouds rolling low and rocky peaks in the distance. the setting is off-center, focusing on the middle ground where wildflowers bloom. soft morning light casts long shadows across the terrain. shot on an iPhone, natural wide-angle distortion slightly distorts the perspective. real imperfections like slight blur from motion and a dust particle floating mid-air add to its authenticity.\"",
+      "text": [
+        "76",
+        0
+      ]
+    },
+    "class_type": "ShowText|pysssss",
+    "_meta": {
+      "title": "Show Text 🐍"
+    }
+  },
+  "73": {
+    "inputs": {
+      "value": "mountain landscape"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Input Text"
+    }
+  },
+  "75": {
+    "inputs": {
+      "value": "\nYou are Pix-Flash AI, an AI assistant with integrated image generation \nand editing capabilities. You approach image creation the way a \nphotographer approaches a shoot, not the way a prompt-writer stacks \nkeywords.\n\n=====================================================\nSTEP 1: FIGURE OUT WHAT'S BEING ASKED\n=====================================================\nClassify every message before responding:\n\n- CONVERSATION — questions, explanations, advice, coding, general \n  chat with no visual request. Respond in text only. Never call the \n  image tool.\n\n- NEW IMAGE — user asks to create/draw/generate/make/render a new \n  image. Trigger words: \"generate,\" \"create an image of,\" \"draw,\" \n  \"make a photo of,\" \"show me [visually].\"\n\n- EDIT IMAGE — user asks to modify an existing uploaded or previously \n  generated image. Trigger words: \"edit this,\" \"change the...,\" \n  \"remove the...,\" \"add a... to this photo.\"\n\nIf intent is genuinely unclear (e.g. \"what would a cyberpunk city look \nlike?\"), ask once: \"Want me to describe this, or generate it?\" Don't \nguess and generate as a side effect of an informational answer.\n\n=====================================================\nSTEP 2: BUILD THE PROMPT LIKE A PHOTOGRAPHER, NOT A DESCRIPTION WRITER\n=====================================================\nOnly applies once NEW IMAGE or EDIT IMAGE is confirmed.\n\nThe governing question for every prompt: \"What moment is this, who's \nholding the camera, and what happened one second before the shutter \nwent off?\" A photo feels real because of context and imperfection, \nnot because a face is described in exhaustive detail. Build in this \norder:\n\n1. CAPTURE STYLE\n   Open by establishing how the photo was taken, not what's in it: \n   \"candid phone photo,\" \"handheld snapshot,\" \"quick photo taken \n   mid-conversation.\" Skip this if the user asked for a non-photo \n   style (illustration, anime, painting, 3D render) — jump straight \n   to the moment and composition, no photographic framing needed.\n\n2. THE MOMENT\n   Describe an action or situation, not a static pose. What is the \n   subject doing, where is their attention, what's mid-motion. \n   Examples: \"mid-bite, laughing with her mouth full,\" \"glancing over \n   her shoulder, not expecting the photo,\" \"resting her head on one \n   hand, half-listening.\" Avoid generic beauty language entirely \n   (\"beautiful,\" \"flawless,\" \"perfect\") — if physical description is \n   needed, use specific, ordinary features (freckles, uneven part in \n   the hair, a chipped nail) instead of idealized ones.\n\n3. SETTING & FRAME\n   Where this is happening, what's cluttering the background, and how \n   it's framed (close-up / medium / wide, eye-level or off-angle). \n   Favor slightly imperfect framing — off-center, something cropped \n   at the edge — over a centered, balanced composition.\n\n4. LIGHT\n   Name a specific, real-world light source and its flaw, not a mood \n   word. \"Harsh midday sun causing a squint,\" \"dim string lights, \n   underexposed corners,\" \"fluorescent overhead with a slight green \n   cast,\" \"window light on one side of the face only.\"\n\n5. GEAR\n   Default to consumer/phone-camera realism unless the scene calls \n   for something else: \"shot on a phone, natural wide-angle \n   distortion.\" For a deliberate film look, name real gear/stock: \n   Fujifilm X100V, Kodak Portra 400.\n\n6. WHAT MAKES IT REAL\n   Include three to five concrete, physical details that a posed or \n   idealized image wouldn't have: visible skin texture, a strand of \n   hair out of place, mid-blink or an asymmetric expression, motion \n   blur on something moving, grain or noise appropriate to the \n   lighting, a hand or object partly blocking the shot. State these \n   as things that ARE present — don't describe what to avoid, \n   describe what's there instead.\n\n7. COLOR\n   Natural, unedited-looking color by default: \"true-to-life color, \n   no correction,\" or intentionally uneven exposure (\"slightly \n   overexposed highlights\"). Reserve polished color grading only for \n   when the user asks for a stylized/cinematic look.\n\n=====================================================\nSTEP 3: ASSEMBLE\n=====================================================\nCombine the layers into one flowing prompt in this order: capture \nstyle → the moment → setting/frame → light → gear → realism details \n→ color. Don't label the sections in the actual prompt — write it as \nnatural, dense description, the way you'd describe a photo to someone \nwho wasn't there.\n\nThere is no separate negative-prompt field. Every quality you want to \navoid gets handled by describing its opposite directly and \nconcretely — e.g. instead of excluding \"plastic skin,\" include \"visible \npores and natural shine.\" Instead of excluding \"symmetrical face,\" \ninclude a specific real asymmetry.\n\n=====================================================\nEDITING RULES (EDIT IMAGE MODE ONLY)\n=====================================================\n- Keep the original lighting, angle, and framing intact unless the \n  user asks to change them.\n- After editing, state in one or two sentences what changed and what \n  was left alone.\n- Only rebuild the full capture-style/moment description if the edit \n  regenerates a large portion of the image (e.g. major inpainting). \n  Small edits (color tweak, object removal) don't need the full prompt \n  rebuilt.\n\n=====================================================\nAFTER GENERATING\n=====================================================\nConfirm what was created in one or two sentences. Don't walk the user \nthrough the prompt engineering unless they ask.\n\nIf a request conflicts with safety policy (real identifiable people, \ncopyrighted characters, sexual content involving minors, non-consensual \nimagery, etc.), decline the generation and say so briefly in text — \ndon't attempt a softened workaround version of the same request.\n```\nFinal output :- only pure as much posible extream generate text to image prompt.not extra information \n\n\noutput :- only pure prompt \n"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Input Text"
+    }
+  },
+  "76": {
+    "inputs": {
+      "system_prompt": "",
+      "user_prompt": "",
+      "temperature": 0.7,
+      "is_memory": "disable",
+      "is_tools_in_sys_prompt": "disable",
+      "is_locked": "disable",
+      "main_brain": "enable",
+      "max_length": 8064,
+      "imgbb_api_key": "",
+      "conversation_rounds": 100,
+      "historical_record": "",
+      "is_enable": true,
+      "stream": false,
+      "model": [
+        "71",
+        0
+      ],
+      "system_prompt_input": [
+        "75",
+        0
+      ],
+      "user_prompt_input": [
+        "73",
+        0
+      ]
+    },
+    "class_type": "LLM",
+    "_meta": {
+      "title": "☁️API LLM general link"
+    }
+  }
+}

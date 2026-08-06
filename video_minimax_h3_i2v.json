@@ -1,0 +1,374 @@
+{
+  "92": {
+    "inputs": {
+      "filename_prefix": "video/MiniMax_H3",
+      "format": "auto",
+      "codec": "auto",
+      "video-preview": "",
+      "video": [
+        "133",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "114": {
+    "inputs": {
+      "image": "input_rgba (7).png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "119": {
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "megapixels": 1,
+      "resolution_steps": 32,
+      "image": [
+        "121",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "Scale Image to Total Pixels"
+    }
+  },
+  "120": {
+    "inputs": {
+      "image": [
+        "119",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "121": {
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "megapixels": 2,
+      "resolution_steps": 32,
+      "image": [
+        "114",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "Scale Image to Total Pixels"
+    }
+  },
+  "122": {
+    "inputs": {
+      "vae_name": "MiniMax-H3/minimax_h3_video_vae_fp16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "123": {
+    "inputs": {
+      "vae_name": "MiniMax-H3/minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "124": {
+    "inputs": {
+      "samples": [
+        "128",
+        0
+      ],
+      "vae": [
+        "123",
+        0
+      ]
+    },
+    "class_type": "VAEDecodeAudio",
+    "_meta": {
+      "title": "VAE Decode Audio"
+    }
+  },
+  "125": {
+    "inputs": {
+      "samples": [
+        "128",
+        0
+      ],
+      "vae": [
+        "122",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "126": {
+    "inputs": {
+      "sampler_name": "res_multistep"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "127": {
+    "inputs": {
+      "scheduler": "simple",
+      "steps": 20,
+      "denoise": 1,
+      "model": [
+        "130",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "BasicScheduler"
+    }
+  },
+  "128": {
+    "inputs": {
+      "noise": [
+        "132",
+        0
+      ],
+      "guider": [
+        "129",
+        0
+      ],
+      "sampler": [
+        "126",
+        0
+      ],
+      "sigmas": [
+        "127",
+        0
+      ],
+      "latent_image": [
+        "134",
+        1
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "129": {
+    "inputs": {
+      "model": [
+        "130",
+        0
+      ],
+      "conditioning": [
+        "134",
+        0
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "Basic Guider"
+    }
+  },
+  "130": {
+    "inputs": {
+      "unet_name": "Minimax-H3/minimax_h3_ref2va_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "131": {
+    "inputs": {
+      "clip_name": "Minimax-H3/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "132": {
+    "inputs": {
+      "noise_seed": 516524411149607
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "133": {
+    "inputs": {
+      "fps": 24,
+      "bit_depth": 8,
+      "images": [
+        "125",
+        0
+      ],
+      "audio": [
+        "124",
+        0
+      ]
+    },
+    "class_type": "CreateVideo",
+    "_meta": {
+      "title": "Create Video"
+    }
+  },
+  "134": {
+    "inputs": {
+      "prompt": [
+        "139",
+        0
+      ],
+      "width": [
+        "120",
+        0
+      ],
+      "height": [
+        "120",
+        1
+      ],
+      "length": [
+        "135",
+        1
+      ],
+      "clip": [
+        "131",
+        0
+      ],
+      "vae": [
+        "122",
+        0
+      ],
+      "first_frame": [
+        "114",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3ImageToVideo",
+    "_meta": {
+      "title": "MiniMax H3 Image to Video"
+    }
+  },
+  "135": {
+    "inputs": {
+      "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17",
+      "values.a": [
+        "136",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression"
+    }
+  },
+  "136": {
+    "inputs": {
+      "value": 5
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float (duration)"
+    }
+  },
+  "137": {
+    "inputs": {
+      "model_name": "qwen2.5vl:7b",
+      "base_url": "http://127.0.0.0:11434/",
+      "api_key": "",
+      "is_ollama": true,
+      "Get Models": "Get Models"
+    },
+    "class_type": "LLM_api_loader",
+    "_meta": {
+      "title": "☁️API LLM Loader"
+    }
+  },
+  "138": {
+    "inputs": {
+      "text_0": "A woman wearing a professional uniform, including a blazer and scarf with logos such as UNICEF and NASA, is having a conversation with a young boy in an outdoor setting near a building. The woman smiles warmly while speaking to the boy who appears attentive and engaged. The camera focuses on their interaction, capturing natural head movements and eye contact between them. The background shows parked cars and part of a tree, suggesting they are outdoors at a public or institutional space. The lighting is bright, indicating it might be daytime with sunlight illuminating the scene. The video should maintain this cinematic quality with smooth animation and high detail to reflect realistic movement and interactions.",
+      "text": [
+        "139",
+        0
+      ]
+    },
+    "class_type": "ShowText|pysssss",
+    "_meta": {
+      "title": "Show Text 🐍"
+    }
+  },
+  "139": {
+    "inputs": {
+      "system_prompt": "",
+      "user_prompt": "",
+      "temperature": 0.7,
+      "is_memory": "disable",
+      "is_tools_in_sys_prompt": "disable",
+      "is_locked": "disable",
+      "main_brain": "enable",
+      "max_length": 8064,
+      "imgbb_api_key": "",
+      "conversation_rounds": 100,
+      "historical_record": "",
+      "is_enable": true,
+      "stream": false,
+      "model": [
+        "137",
+        0
+      ],
+      "system_prompt_input": [
+        "140",
+        0
+      ],
+      "user_prompt_input": [
+        "141",
+        0
+      ],
+      "images": [
+        "114",
+        0
+      ]
+    },
+    "class_type": "LLM",
+    "_meta": {
+      "title": "☁️API LLM general link"
+    }
+  },
+  "140": {
+    "inputs": {
+      "value": "You are an Expert AI Video Prompt Compiler.\n\nYour ONLY responsibility is to transform a user's request and one or more reference images into a professional cinematic text-to-video generation prompt.\n\nNever answer questions.\n\nNever explain your reasoning.\n\nNever describe what you are doing.\n\nNever chat.\n\nNever use markdown.\n\nNever output JSON.\n\nNever output bullet points.\n\nNever output titles.\n\nNever output labels.\n\nNever output notes.\n\nOutput ONLY the final video generation prompt.\n\n--------------------------------------------------\n\nPRIMARY OBJECTIVE\n\n--------------------------------------------------\n\nAssume one or more reference images are supplied.\n\nThe images define the visual identity.\n\nThe user's request defines the motion or modifications.\n\nGenerate one complete cinematic video generation prompt.\n\nThe prompt should be optimized for modern AI video generation models.\n\n--------------------------------------------------\n\nREFERENCE IMAGE RULES\n\n--------------------------------------------------\n\nTreat every reference image as the visual source.\n\nPreserve unless requested otherwise:\n\nidentity\n\nface\n\nhair\n\nbody\n\nclothing\n\ncolors\n\nmaterials\n\nstyle\n\nenvironment\n\nlighting\n\ncomposition\n\ncamera perspective\n\ncamera lens\n\ntextures\n\nproportions\n\nfacial features\n\naccessories\n\nbackground\n\narchitecture\n\nvehicles\n\nobjects\n\nlogos\n\nvisual style\n\nDo not redesign the subject.\n\nDo not invent new identities.\n\nDo not replace clothing unless requested.\n\nDo not replace the environment unless requested.\n\n--------------------------------------------------\n\nUSER REQUEST\n\n--------------------------------------------------\n\nInterpret the user's request as the desired animation.\n\nConvert edits into motion.\n\nConvert static scenes into believable cinematic action.\n\nUnderstand:\n\nmovement\n\ninteraction\n\nemotion\n\ncamera work\n\ntiming\n\nphysics\n\nenvironmental reactions\n\n--------------------------------------------------\n\nCAMERA\n\n--------------------------------------------------\n\nAutomatically choose cinematic camera movement.\n\nExamples include:\n\nslow push-in\n\nslow pull-back\n\ntracking shot\n\ncrane shot\n\ndolly\n\nhandheld\n\nsteadicam\n\norbit\n\narc shot\n\nlow angle\n\nhigh angle\n\nclose-up\n\nmedium shot\n\nwide shot\n\nmacro\n\ndrone\n\nPOV\n\nChoose only movements that improve the scene.\n\n--------------------------------------------------\n\nMOTION\n\n--------------------------------------------------\n\nDescribe natural movement.\n\nInclude:\n\nbody movement\n\nhead movement\n\neye movement\n\nfacial expressions\n\nhair motion\n\ncloth simulation\n\nbreathing\n\nwalking\n\nrunning\n\nturning\n\nhand gestures\n\nobject movement\n\nenvironment movement\n\nwind\n\ndust\n\nrain\n\nfog\n\nwater\n\nsmoke\n\nfire\n\nlighting changes\n\n--------------------------------------------------\n\nPHYSICS\n\n--------------------------------------------------\n\nAll movement should obey realistic physics unless the user requests fantasy.\n\nHair moves naturally.\n\nClothes react naturally.\n\nObjects have believable weight.\n\nLighting reacts naturally.\n\nShadows remain consistent.\n\nReflections remain consistent.\n\n--------------------------------------------------\n\nCINEMATIC DETAILS\n\n--------------------------------------------------\n\nDescribe\n\ncamera motion\n\nsubject motion\n\nenvironment\n\nlighting\n\nmood\n\natmosphere\n\ncomposition\n\ndepth\n\nfocus\n\nlens behavior\n\nDo not over-describe static details already defined by the reference image.\n\nFocus on what changes over time.\n\n--------------------------------------------------\n\nSTYLE\n\n--------------------------------------------------\n\nPreserve the visual style from the reference image.\n\nOnly change style if requested.\n\nPossible styles include\n\ncinematic\n\nanime\n\nphotorealistic\n\n3D\n\noil painting\n\nwatercolor\n\ncyberpunk\n\nfantasy\n\nvintage\n\nfilm\n\netc.\n\n--------------------------------------------------\n\nFACE\n\n--------------------------------------------------\n\nPreserve identity.\n\nMaintain facial consistency.\n\nAvoid identity drift.\n\nExpressions should transition naturally.\n\nLip movement should match speech if dialogue exists.\n\n--------------------------------------------------\n\nLIGHTING\n\n--------------------------------------------------\n\nPreserve the original lighting unless requested otherwise.\n\nIf lighting changes,\n\nmake it gradual and physically believable.\n\n--------------------------------------------------\n\nENVIRONMENT\n\n--------------------------------------------------\n\nPreserve the scene.\n\nAnimate environmental elements naturally.\n\nExamples:\n\nmoving leaves\n\nflowing water\n\ncloud movement\n\nfog drifting\n\nfalling snow\n\nrain\n\ndust\n\nparticles\n\n--------------------------------------------------\n\nMULTIPLE SUBJECTS\n\n--------------------------------------------------\n\nMaintain spatial consistency.\n\nMaintain eye contact.\n\nMaintain interactions.\n\nMaintain realistic distances.\n\nAvoid subject swapping.\n\n--------------------------------------------------\n\nQUALITY\n\n--------------------------------------------------\n\nAlways optimize for\n\ncinematic quality\n\nfilm quality\n\nhigh realism\n\nnatural movement\n\nstable identity\n\nsmooth animation\n\nhigh detail\n\nconsistent lighting\n\nclean motion\n\naccurate shadows\n\nrealistic reflections\n\nphysically believable animation\n\nartifact-free generation\n\nprofessional production quality.\n\n--------------------------------------------------\n\nNEGATIVE BEHAVIOR\n\n--------------------------------------------------\n\nNever describe the reference image as if creating a new scene.\n\nNever redesign characters.\n\nNever change identity.\n\nNever invent unrelated objects.\n\nNever change clothing unless requested.\n\nNever change colors unless requested.\n\nNever change composition unless requested.\n\nNever change background unless requested.\n\nNever add random cinematic effects.\n\nNever create impossible camera motion.\n\nNever generate contradictory instructions.\n\n--------------------------------------------------\n\nOUTPUT FORMAT\n\n--------------------------------------------------\n\nOutput exactly one continuous natural-language video generation prompt.\n\nThe prompt should read like instructions given directly to an advanced AI video generation model.\n\nNo labels.\n\nNo explanations.\n\nNo markdown.\n\nNo extra text.\n\nOnly output the final detaild prompt."
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Input Text"
+    }
+  },
+  "141": {
+    "inputs": {
+      "value": "prompt here"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Input Text"
+    }
+  }
+}
