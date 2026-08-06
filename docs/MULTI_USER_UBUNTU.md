@@ -1,135 +1,163 @@
-# Multi-user hub — one Ubuntu server, many Nuke artists
+# Multi-user hub — secure Ubuntu (no share access)
 
 ## Goal
 
-| Role | Machine | Runs |
-|------|---------|------|
-| **Hub** | Ubuntu server | ComfyUI + shared ComfyNuke code + GPU |
-| **Artists** | Windows (or Linux) Nuke | Only a **launch** snippet in Script Editor |
+| Port | Service | Who uses it |
+|------|---------|-------------|
+| **8188** | ComfyUI API (GPU jobs) | Nuke via `comfy_client` |
+| **6000** | ComfyNuke **code** HTTP (read-only) | Nuke bootstrap downloads scripts |
 
-Artists do **not** need a full local clone. They load code from the share and send jobs to the single ComfyUI queue.
+Artists **cannot** SSH or open server folders. They only need LAN access to:
+
+- `http://192.168.91.13:8188`
+- `http://192.168.91.13:6000`
 
 ```
-  [Nuke PC A] --launch-->  \\server\ComfyNuke\nuke\launch.py
-  [Nuke PC B] --launch-->  same share
-  [Nuke PC C] --launch-->  same share
-         \         |         /
-          \        |        /
-           v       v       v
-        Ubuntu: ComfyUI :8188  (one GPU queue)
+  Nuke PC  --GET :6000-->  code (ComfyEdit, workflows)
+  Nuke PC  --API :8188-->  ComfyUI queue / upload / view
 ```
 
-## 1. Ubuntu server setup
+Repo on server:
 
-### 1.1 ComfyUI
+`/home/radhakrishnan/Comfyui-Setup/ComfyNuke`
 
-- Install ComfyUI as you already do (models, custom nodes for edit / Krea / MiniMax / LLM).
-- Listen on all interfaces, e.g. `--listen 0.0.0.0 --port 8188`.
-- Firewall: allow LAN TCP `8188`.
+---
 
-### 1.2 Deploy ComfyNuke code
+## 1. Ubuntu — once
+
+### 1.1 Clone / update
 
 ```bash
-# example
-sudo mkdir -p /opt/ComfyNuke
-sudo chown "$USER:$USER" /opt/ComfyNuke
-cd /opt/ComfyNuke
-git clone https://github.com/Krish-701/ComfyNuke.git .
+cd /home/radhakrishnan/Comfyui-Setup
+git clone https://github.com/Krish-701/ComfyNuke.git
+# or
+cd /home/radhakrishnan/Comfyui-Setup/ComfyNuke && git pull
+```
 
-# site config (not committed)
+### 1.2 Site config
+
+```bash
+cd /home/radhakrishnan/Comfyui-Setup/ComfyNuke
 cp studio_config.example.json studio_config.json
-nano studio_config.json   # set "server": "http://<this-host-ip>:8188"
+# ensure:
+#   "server": "http://192.168.91.13:8188"
+#   "code_base_url": "http://192.168.91.13:6000"
 ```
 
-### 1.3 Share the folder (Samba example)
+### 1.3 ComfyUI on 8188
+
+Run ComfyUI as you already do, listening on LAN, e.g.:
 
 ```bash
-sudo apt install samba
-# export /opt/ComfyNuke as share name ComfyNuke (read-only for artists is OK)
-# Artists map: \\192.168.91.13\ComfyNuke
+# example — use your real Comfy start command
+python main.py --listen 0.0.0.0 --port 8188
 ```
 
-Or NFS / existing studio NAS — any path Nuke can `open()`.
-
-### 1.4 Optional: git pull for updates
-
-On the server, when you push new code to GitHub:
+### 1.4 Code server on 6000
 
 ```bash
-cd /opt/ComfyNuke && git pull
+cd /home/radhakrishnan/Comfyui-Setup/ComfyNuke
+chmod +x server/start_code_server.sh
+./server/start_code_server.sh
+# or:
+python3 server/serve_code.py --root /home/radhakrishnan/Comfyui-Setup/ComfyNuke --host 0.0.0.0 --port 6000
 ```
 
-Artists re-run **launch** in Nuke to reload modules (launch clears `ComfyEdit` / `comfy_client` cache).
+Check from any PC:
 
-## 2. Artist PC (Windows)
-
-### 2.1 Map share (once)
-
-```
-\\192.168.91.13\ComfyNuke
+```text
+http://192.168.91.13:6000/health
 ```
 
-### 2.2 Script Editor (every session, or put in menu.py)
+Should say `ComfyNuke code server OK`.
 
-Use `nuke/artist_launch.txt` — short form:
+### 1.5 Firewall
+
+Allow LAN **TCP 8188** and **TCP 6000** only (not SSH to artists if you do not want).
+
+Optional systemd unit sketch:
+
+```ini
+# /etc/systemd/system/comfynuke-code.service
+[Unit]
+Description=ComfyNuke code HTTP :6000
+After=network.target
+
+[Service]
+User=radhakrishnan
+WorkingDirectory=/home/radhakrishnan/Comfyui-Setup/ComfyNuke
+ExecStart=/usr/bin/python3 server/serve_code.py --root /home/radhakrishnan/Comfyui-Setup/ComfyNuke --host 0.0.0.0 --port 6000
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+---
+
+## 2. Artist PC — every Nuke session
+
+**Paste only this** in Script Editor → Run:
 
 ```python
-import os
-os.environ["COMFYNUKE_ROOT"] = r"\\192.168.91.13\ComfyNuke"
-os.environ["COMFYNUKE_SERVER"] = "http://192.168.91.13:8188"
-exec(open(os.path.join(os.environ["COMFYNUKE_ROOT"], "nuke", "launch.py"), encoding="utf-8").read())
+exec(__import__('urllib.request').request.urlopen('http://192.168.91.13:6000/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
 ```
 
-### 2.3 Permanent menu (optional)
+Also in `nuke/artist_one_liner.txt`.
 
-In `C:/Users/<artist>/.nuke/menu.py`:
+Then menu:
 
-```python
-import os
-os.environ["COMFYNUKE_ROOT"] = r"\\192.168.91.13\ComfyNuke"
-os.environ["COMFYNUKE_SERVER"] = "http://192.168.91.13:8188"
-exec(open(os.path.join(os.environ["COMFYNUKE_ROOT"], "nuke", "menu_snippet.py"), encoding="utf-8").read())
-```
+**Nuke → ComfyUI →** Edit Image… | Image Gen… | Image to Video… | Ping Server
 
-Update `menu_snippet.py` paths if needed — or call `launch.py` instead.
+Re-run the one-liner after `git pull` on the server to refresh local cache.
 
-## 3. What is shared vs local
+---
 
-| Asset | Where |
-|-------|--------|
-| Python code + workflows JSON | Ubuntu share (read) |
-| `studio_config.json` | Ubuntu share (server URL) |
-| Temp exports (plates/masks) | Artist PC `%TEMP%/comfy_nuke/<host>_<pid>/` |
-| Downloaded results | Artist PC `~/ComfyNuke_out/<hostname>/` (override with `COMFYNUKE_OUT`) |
-| Comfy models / GPU | Ubuntu only |
-| Job queue | ComfyUI global queue (one job at a time on GPU) |
+## 3. What gets downloaded
+
+Bootstrap pulls into `~/.comfynuke/cache/` on the **artist machine**:
+
+- `nuke/ComfyEdit.py`
+- `client/comfy_client.py`
+- `Edit_Image_v05.json`
+- `Image_generation_v01.json`
+- `video_minimax_h3_i2v.json`
+- `studio_config.json` (if present on server)
+
+Results go to `~/ComfyNuke_out/<hostname>/` (not on the server).
+
+Temps: `%TEMP%/comfy_nuke/<host>_<pid>/`
+
+---
 
 ## 4. Multi-user behaviour
 
-- **Per Nuke session:** only one local job at a time (panel lock).
-- **Across artists:** ComfyUI queues jobs. Later artists wait; Script Editor shows `Comfy queued` / `Comfy running`.
-- **Filenames:** uploads use `nuke_<hostname>_...` and unique `filename_prefix` so outputs do not clobber.
-- **Do not** point all artists’ `output_dir` at the same server folder without unique subdirs.
+- All artists share **one ComfyUI queue** on the GPU (jobs wait in line).
+- One active job **per Nuke session**.
+- Unique upload names / output prefixes per host so files do not clobber.
+
+---
 
 ## 5. Checklist
 
-- [ ] ComfyUI reachable: browser `http://<server-ip>:8188`
-- [ ] From artist PC: open `\\server\ComfyNuke\nuke\launch.py`
-- [ ] Launch prints `ComfyUI: http://...` and menus appear
-- [ ] **Ping Server** works
-- [ ] Second artist can queue while first is running (waits, then runs)
+- [ ] `http://192.168.91.13:8188` opens ComfyUI
+- [ ] `http://192.168.91.13:6000/health` OK
+- [ ] Nuke one-liner prints `READY — multi-user remote load OK`
+- [ ] Ping Server succeeds
+- [ ] Edit / Gen / I2V each produce a new Read
 
 ## 6. Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| `ComfyEdit.py not found` | Fix `COMFYNUKE_ROOT` / share mount |
-| Timeout / connection refused | Comfy listen `0.0.0.0`, firewall 8188, correct IP |
-| Wrong workflows | `git pull` on server; re-run launch |
-| Two Nukes on same PC fight temps | Temps are per-pid; still one job per session |
-| Results “overlap” old Reads | Each download is a unique file under `ComfyNuke_out` |
+| Bootstrap timeout :6000 | Start `serve_code.py`; open firewall 6000 |
+| Ping fails :8188 | ComfyUI listen `0.0.0.0`; firewall 8188 |
+| 403 on download | Path not in allow-list; use paths under `nuke/`, `client/`, workflows |
+| Old code | `git pull` on server; re-run Nuke one-liner |
+| Workflow missing | Ensure JSON files exist in repo root on server |
 
-## 7. Security notes
+## Security
 
-- ComfyUI HTTP API is usually **open LAN** (no auth). Restrict to studio network.
-- Share can be **read-only** for artists; only server admin writes code.
+- Port **6000** is **read-only** (GET only); only allow-listed relative paths under the ComfyNuke repo.
+- Do not put secrets in the served tree.
+- Keep ComfyUI and code ports on studio LAN only.
