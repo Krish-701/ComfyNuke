@@ -1,7 +1,7 @@
 """
 ComfyUI client for Nuke <-> Edit_Image workflow (PNG RGBA + crop/inpaint/stitch).
 
-Sequential jobs only. Default workflow: Edit_Image_v05.json
+Sequential jobs only. Default workflow: Edit_Image_v06.json
   LoadImage → mask → InpaintCrop → LLM (node 289 user text) → Qwen edit → Stitch → Save
 """
 
@@ -23,7 +23,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-# Fallback node IDs (Edit_Image_v05.json). Always auto-discovered when possible.
+# Fallback node IDs (Edit_Image_v06.json). Always auto-discovered when possible.
 NODE_LOAD_IMAGE = "278"
 NODE_PROMPT = "289"  # PrimitiveStringMultiline "Input Text" → LLM user_prompt
 NODE_SEED = "242"  # Seed (rgthree)
@@ -218,6 +218,7 @@ class ComfyClient:
         here = Path(__file__).resolve().parent
         repo = here.parent
         for name in (
+            "Edit_Image_v06.json",
             "Edit_Image_v05.json",
             "Edit_Image_v04.json",
             "Edit_Image_v03.json",
@@ -229,7 +230,7 @@ class ComfyClient:
             candidate = repo / name
             if candidate.is_file():
                 return str(candidate)
-        return str(repo / "Edit_Image_v05.json")
+        return str(repo / "Edit_Image_v06.json")
 
     def _url(self, path: str, query: Optional[Dict[str, str]] = None) -> str:
         base = f"{self.server}{path}"

@@ -42,7 +42,7 @@ Full guide: [docs/MULTI_USER_UBUNTU.md](docs/MULTI_USER_UBUNTU.md)
 
 | Menu | Workflow file |
 |------|----------------|
-| Edit Image | `Edit_Image_v05.json` |
+| Edit Image | `Edit_Image_v06.json` |
 | Image Gen | `Image_generation_v01.json` |
 | Image to Video | `video_minimax_h3_i2v.json` |
 

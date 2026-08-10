@@ -13,4 +13,6 @@ exec(__import__('urllib.request').request.urlopen('http://192.168.91.13:6000/nuk
 #   Image to Video...
 #   Ping Server
 #
-# Re-run this line after server git pull to get latest scripts.
+# Re-run this line each session (or after server git pull).
+# Bootstrap checks server /manifest.json and replaces outdated local
+# cache (scripts + workflows) with the hub version when needed.

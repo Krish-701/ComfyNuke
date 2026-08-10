@@ -4,7 +4,7 @@ Nuke panel for ComfyUI Edit_Image (PNG RGBA + crop/inpaint/stitch).
 Always uploads PNG with alpha (never raw JPG).
 Per-session temp files under %TEMP%/comfy_nuke/<host>_<pid>/ (multi-user safe).
 
-Workflow default: Edit_Image_v05.json
+Workflow default: Edit_Image_v06.json
   LoadImage → mask → InpaintCrop → LLM (node 289 user text) → Qwen edit → Stitch → Save
 
 LOAD (artists — multi-user hub):
@@ -93,7 +93,7 @@ else:
 CLIENT_DIR = os.path.join(REPO_ROOT, "client")
 _STUDIO = _load_studio_config(REPO_ROOT)
 
-DEFAULT_WORKFLOW = os.path.join(REPO_ROOT, "Edit_Image_v05.json").replace("\\", "/")
+DEFAULT_WORKFLOW = os.path.join(REPO_ROOT, "Edit_Image_v06.json").replace("\\", "/")
 IMAGE_GEN_WORKFLOW = os.path.join(REPO_ROOT, "Image_generation_v01.json").replace(
     "\\", "/"
 )
@@ -123,11 +123,78 @@ REF_ALPHA_EXAMPLE = r"D:\bear-alpha.png"
 
 STUDIO_NAME = str(_STUDIO.get("studio_name") or "ComfyNuke")
 STUDIO_CONFIG_PATH = _STUDIO.get("_config_path") or ""
+CODE_BASE_URL = (
+    (os.environ.get("COMFYNUKE_CODE_BASE") or "").strip()
+    or str(_STUDIO.get("code_base_url") or "").strip()
+    or "http://192.168.91.13:6000"
+).rstrip("/")
 
 # True while export+Comfy job is active (one at a time PER Nuke session)
 _BG_JOB_ACTIVE = False
 # Active QTimer poll state (main-thread only — no Python threads)
 _POLL_STATE = None  # type: ignore
+
+
+def _refresh_workflow_from_server(wf_path, timeout=60):
+    """
+    Always pull the named workflow from the code server (:6000) into the local
+    path before a job runs. Fixes stale ~/.comfynuke/cache copies after the
+    hub Edit_Image / gen / i2v JSON is updated on Ubuntu.
+    Returns the path used (same as wf_path on success or if refresh skipped).
+    """
+    if not wf_path:
+        return wf_path
+    rel = os.path.basename(str(wf_path).replace("\\", "/"))
+    if not rel.lower().endswith(".json"):
+        return wf_path
+    base = (os.environ.get("COMFYNUKE_CODE_BASE") or CODE_BASE_URL or "").strip().rstrip(
+        "/"
+    )
+    if not base:
+        return wf_path
+    url = "%s/%s" % (base, rel)
+    try:
+        try:
+            from urllib.request import Request, urlopen
+        except ImportError:
+            from urllib2 import Request, urlopen  # type: ignore
+
+        req = Request(url, headers={"User-Agent": "ComfyNuke-Workflow-Refresh/1.0", "Cache-Control": "no-cache", "Pragma": "no-cache"})
+        resp = urlopen(req, timeout=timeout)
+        try:
+            data = resp.read()
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+        if not data or len(data) < 20:
+            raise RuntimeError("empty or tiny response (%s bytes)" % (len(data) if data else 0))
+        # Validate JSON before overwriting a good local file
+        try:
+            parsed = json.loads(data.decode("utf-8"))
+            if not isinstance(parsed, dict):
+                raise ValueError("not a JSON object")
+        except Exception as e:
+            raise RuntimeError("invalid workflow JSON from server: %s" % e)
+        parent = os.path.dirname(wf_path)
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent)
+        # Atomic-ish write
+        tmp = wf_path + ".download"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, wf_path)
+        _log("workflow refreshed from server: %s (%s bytes) ← %s" % (rel, len(data), url))
+    except Exception as e:
+        # Keep local file if any; do not block the job when offline
+        if os.path.isfile(wf_path):
+            _log("workflow refresh skipped (using local cache): %s — %s" % (rel, e))
+        else:
+            raise RuntimeError(
+                "Cannot download workflow %s from %s\n%s" % (rel, url, e)
+            )
+    return wf_path
 
 if CLIENT_DIR not in sys.path:
     sys.path.insert(0, CLIENT_DIR)
@@ -1863,18 +1930,27 @@ def run_edit_on_node(
     os.makedirs(out_dir, exist_ok=True)
 
     wf_path = workflow or DEFAULT_WORKFLOW
+    # Prefer latest edit workflow on disk (v06); migrate any older name.
     for old in (
         "Edit_Image_API.json",
         "Edit_Image_v01.json",
         "Edit_Image_v02.json",
         "Edit_Image_v03.json",
         "Edit_Image_v04.json",
+        "Edit_Image_v05.json",
     ):
         if wf_path.endswith(old):
-            newer = os.path.join(REPO_ROOT, "Edit_Image_v05.json")
+            newer = os.path.join(REPO_ROOT, "Edit_Image_v06.json")
             if os.path.isfile(newer):
                 wf_path = newer
             break
+    # If default path missing but only older file exists, still try v06 name for server pull
+    if not os.path.isfile(wf_path) and not str(wf_path).endswith("Edit_Image_v06.json"):
+        cand = os.path.join(REPO_ROOT, "Edit_Image_v06.json")
+        wf_path = cand
+
+    # Always take the hub's latest graph before this job (not the Nuke cache).
+    wf_path = _refresh_workflow_from_server(wf_path)
 
     # --- Phase 1: Nuke Write ---
     _BG_JOB_ACTIVE = True
@@ -2602,6 +2678,14 @@ def schedule_image_gen(
 
     server = (server or DEFAULT_SERVER).strip()
     wf_path = workflow or IMAGE_GEN_WORKFLOW
+    # Pull latest Image_generation_*.json from code server before using cache
+    try:
+        wf_path = _refresh_workflow_from_server(wf_path)
+    except Exception as e:
+        if not os.path.isfile(wf_path):
+            nuke.message("Workflow not found / cannot refresh:\n%s\n%s" % (wf_path, e))
+            return
+        _log("Image Gen — workflow refresh failed, trying local: %s" % e)
     if not os.path.isfile(wf_path):
         nuke.message("Workflow not found:\n%s" % wf_path)
         return
@@ -2890,6 +2974,13 @@ def schedule_image_to_video(
 
     server = (server or DEFAULT_SERVER).strip()
     wf_path = workflow or I2V_WORKFLOW
+    try:
+        wf_path = _refresh_workflow_from_server(wf_path)
+    except Exception as e:
+        if not os.path.isfile(wf_path):
+            nuke.message("Workflow not found / cannot refresh:\n%s\n%s" % (wf_path, e))
+            return
+        _log("I2V — workflow refresh failed, trying local: %s" % e)
     if not os.path.isfile(wf_path):
         nuke.message("Workflow not found:\n%s" % wf_path)
         return

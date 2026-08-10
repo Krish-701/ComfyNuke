@@ -1,7 +1,7 @@
 {
   "170": {
     "inputs": {
-      "unet_name": "Qwen-2511/qwen_image_edit_2511_int8_convrot.safetensors",
+      "unet_name": "Qwen-2511/qwen_image_edit_2511_fp8mixed.safetensors",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",
@@ -129,8 +129,8 @@
   },
   "185": {
     "inputs": {
-      "seed": 788419895340575,
-      "steps": 4,
+      "seed": 348956631641755,
+      "steps": 8,
       "cfg": 1,
       "sampler_name": "euler",
       "scheduler": "simple",
@@ -175,7 +175,7 @@
   },
   "200": {
     "inputs": {
-      "lora_name": "Qwen-2511/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+      "lora_name": "Qwen-2511/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors",
       "strength_model": 1,
       "model": [
         "177",
@@ -326,7 +326,7 @@
   },
   "278": {
     "inputs": {
-      "image": "input_rgba (6).png"
+      "image": "input_rgba (9).png"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -394,7 +394,7 @@
   },
   "289": {
     "inputs": {
-      "value": "remove the boy"
+      "value": "change the boy dress color to black"
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
@@ -403,7 +403,7 @@
   },
   "290": {
     "inputs": {
-      "text_0": "Remove the boy from the image and seamlessly reconstruct the background behind him using matching textures, lighting, shadows, reflections, perspective, surrounding objects, and environmental details. Preserve the woman exactly as she is, including her expression, pose, body proportions, and clothing. Keep every other element unchanged and ensure the edit is completely seamless, photorealistic, and free of visible artifacts.",
+      "text_0": "Change the color of the boy's dress to black while maintaining its shape, material properties, reflections, lighting, shadows, and surrounding environment so it appears natural and photorealistic. Ensure every other element remains unchanged and blend seamlessly with the existing scene.",
       "text": [
         "286",
         0

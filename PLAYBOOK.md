@@ -30,7 +30,7 @@ Multi-artist **Nuke (Windows)** talks to **ComfyUI (Linux, default `http://192.1
 
 | Mode | Menu | Workflow file | Inject summary |
 |------|------|---------------|----------------|
-| Edit Image | ComfyUI → Edit Image... | `D:\AI-Dev\Krish-ComfyNuke\Edit_Image_v05.json` | LoadImage `278`, user prompt `289.value`, seed auto, SaveImage `299` |
+| Edit Image | ComfyUI → Edit Image... | `D:\AI-Dev\Krish-ComfyNuke\Edit_Image_v06.json` | LoadImage `278`, user prompt `289.value`, seed auto, SaveImage `299` |
 | Image Gen (txt2img) | ComfyUI → Image Gen... | `D:\AI-Dev\Krish-ComfyNuke\Image_generation_v01.json` | no LoadImage, prompt `73.value`, SaveImage `29` |
 | Image to Video | ComfyUI → Image to Video... | `D:\AI-Dev\Krish-ComfyNuke\video_minimax_h3_i2v.json` | LoadImage `114`, user prompt `141.value`, RandomNoise seed `132.noise_seed`, SaveVideo `92` |
 
@@ -83,7 +83,7 @@ If continuing development: **stabilize video Read in Nuke** (confirm `first`/`la
 | HTTP client | `D:\AI-Dev\Krish-ComfyNuke\client\comfy_client.py` |
 | Config example | `D:\AI-Dev\Krish-ComfyNuke\client\config.example.json` |
 | Download dir | `D:\AI-Dev\Krish-ComfyNuke\client\out\` |
-| Edit workflow | `D:\AI-Dev\Krish-ComfyNuke\Edit_Image_v05.json` |
+| Edit workflow | `D:\AI-Dev\Krish-ComfyNuke\Edit_Image_v06.json` |
 | Gen workflow | `D:\AI-Dev\Krish-ComfyNuke\Image_generation_v01.json` |
 | I2V workflow | `D:\AI-Dev\Krish-ComfyNuke\video_minimax_h3_i2v.json` |
 | Nuke temp exports | `%TEMP%\comfy_nuke\` e.g. `C:\Users\[REPLACE: windows user]\AppData\Local\Temp\comfy_nuke\` — files: `plate_srgb.png`, `input_rgba.png`, `mask_luma.png`, `i2v_frame.png`, … |
@@ -375,7 +375,7 @@ Nothing in client automatically deletes remote Comfy output folders beyond uniqu
 | `D:\AI-Dev\Krish-ComfyNuke\nuke\menu_snippet.py` | For `~/.nuke/menu.py` permanent load |
 | `D:\AI-Dev\Krish-ComfyNuke\client\comfy_client.py` | HTTP API, inject discovery, build_prompt, SaveVideo support, prefer video/EXR/PNG |
 | `D:\AI-Dev\Krish-ComfyNuke\client\config.example.json` | Example server/workflow/timeout |
-| `D:\AI-Dev\Krish-ComfyNuke\Edit_Image_v05.json` | Edit workflow API format |
+| `D:\AI-Dev\Krish-ComfyNuke\Edit_Image_v06.json` | Edit workflow API format |
 | `D:\AI-Dev\Krish-ComfyNuke\Image_generation_v01.json` | Txt2img workflow |
 | `D:\AI-Dev\Krish-ComfyNuke\video_minimax_h3_i2v.json` | MiniMax H3 i2v (114 / 141 / 92) |
 | `D:\AI-Dev\Krish-ComfyNuke\client\out\` | Downloaded results (png/mp4) |
@@ -408,7 +408,7 @@ Deleted files in recent work: **none known** for the i2v fix path. Menu *command
 ## Appendix A — Workflow inject cheatsheet [VERIFIED discovery 2026-08-05]
 
 ```
-Edit_Image_v05.json
+Edit_Image_v06.json
   LoadImage 278 | prompt 289 value | seed 185 seed | SaveImage 299
 
 Image_generation_v01.json

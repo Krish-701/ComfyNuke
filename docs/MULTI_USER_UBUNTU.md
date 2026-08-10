@@ -109,7 +109,9 @@ Then menu:
 
 **Nuke → ComfyUI →** Edit Image… | Image Gen… | Image to Video… | Ping Server
 
-Re-run the one-liner after `git pull` on the server to refresh local cache.
+Re-run the one-liner each Nuke session (or after a server `git pull`). Bootstrap
+compares `/manifest.json` on the code server with `~/.comfynuke/cache/.comfynuke_manifest.json`
+and **replaces** any outdated scripts or workflows with the server copies.
 
 ---
 
@@ -119,7 +121,7 @@ Bootstrap pulls into `~/.comfynuke/cache/` on the **artist machine**:
 
 - `nuke/ComfyEdit.py`
 - `client/comfy_client.py`
-- `Edit_Image_v05.json`
+- `Edit_Image_v06.json`
 - `Image_generation_v01.json`
 - `video_minimax_h3_i2v.json`
 - `studio_config.json` (if present on server)
