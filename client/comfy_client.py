@@ -1,8 +1,9 @@
 """
 ComfyUI client for Nuke <-> Edit_Image workflow (PNG RGBA + crop/inpaint/stitch).
 
-Sequential jobs only. Default workflow: Edit_Image_v06.json
-  LoadImage → mask → InpaintCrop → LLM (node 289 user text) → Qwen edit → Stitch → Save
+Sequential jobs only. Default workflow: Edit_Image_v08.json
+  LoadImage 80 (plate_srgb) + LoadImage 123 (mask_luma) → crop/inpaint
+  → LLM (node 109 user text value) → Qwen edit → Stitch → Save
 """
 
 from __future__ import annotations
@@ -23,11 +24,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-# Fallback node IDs (Edit_Image_v06.json). Always auto-discovered when possible.
-NODE_LOAD_IMAGE = "278"
-NODE_PROMPT = "289"  # PrimitiveStringMultiline "Input Text" → LLM user_prompt
-NODE_SEED = "242"  # Seed (rgthree)
-NODE_SAVE = "299"
+# Fallback node IDs (Edit_Image_v08.json). Auto-discovered when possible.
+NODE_LOAD_IMAGE = "80"  # plate_srgb.png
+NODE_LOAD_MASK = "123"  # mask_luma.png
+NODE_PROMPT = "109"  # PrimitiveStringMultiline "Input Text" → LLM.user_prompt_input
+NODE_SEED = "242"  # Seed (rgthree) — may differ; auto-discovered
+NODE_SAVE = "121"
 
 _JOB_LOCK = threading.Lock()
 _JOB_BUSY = False
@@ -204,7 +206,8 @@ class ComfyClient:
         self.workflow_path = workflow_path or self._default_workflow_path()
         self._workflow_template: Optional[Dict[str, Any]] = None
         # Resolved per-workflow (None until load_workflow)
-        self.id_load: Optional[str] = None
+        self.id_load: Optional[str] = None  # plate LoadImage
+        self.id_load_mask: Optional[str] = None  # mask LoadImage (v08+)
         self.id_prompt: Optional[str] = None
         self.id_prompt_key = "value"  # or "text"
         self.id_prompt_neg: Optional[str] = None
@@ -218,6 +221,8 @@ class ComfyClient:
         here = Path(__file__).resolve().parent
         repo = here.parent
         for name in (
+            "Edit_Image_v08.json",
+            "Edit_Image_v07.json",
             "Edit_Image_v06.json",
             "Edit_Image_v05.json",
             "Edit_Image_v04.json",
@@ -230,7 +235,7 @@ class ComfyClient:
             candidate = repo / name
             if candidate.is_file():
                 return str(candidate)
-        return str(repo / "Edit_Image_v06.json")
+        return str(repo / "Edit_Image_v08.json")
 
     def _url(self, path: str, query: Optional[Dict[str, str]] = None) -> str:
         base = f"{self.server}{path}"
@@ -258,6 +263,14 @@ class ComfyClient:
                 return resp.read()
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
+            if e.code == 403:
+                raise ComfyError(
+                    "ACCESS DENIED (HTTP 403) — this machine's IP is disabled or not "
+                    "on the Access Control allowlist.\n"
+                    "Admin: open http://SERVER:8600/admin → enable your IP "
+                    "(and master Access Control ON).\n"
+                    f"Server: {self.server}\n{body[:800]}"
+                ) from e
             raise ComfyError(f"HTTP {e.code} {path}: {body[:2000]}") from e
         except urllib.error.URLError as e:
             raise ComfyError(f"Cannot reach ComfyUI at {self.server}: {e}") from e
@@ -298,13 +311,24 @@ class ComfyClient:
         self.workflow_path = p
 
         # Auto-discover inject points (edit + txt2img)
-        # LoadImage may be missing for pure text-to-image workflows
-        self.id_load = _find_node_id(data, "LoadImage")  # None for Image_generation
+        # v08+: plate LoadImage (80) + mask LoadImage (123)
+        # Older graphs: single LoadImage (RGBA with alpha)
+        self.id_load, self.id_load_mask = self._resolve_load_image_nodes(data)
 
         # User prompt: LLM user field (v04) or CLIP text string (v03)
-        pid, pkey = _find_user_prompt_inject(data)
-        self.id_prompt = pid or NODE_PROMPT
-        self.id_prompt_key = pkey or "value"
+        # Prefer fixed v08 node 109 when present (user edit text)
+        if (
+            NODE_PROMPT in data
+            and isinstance(data.get(NODE_PROMPT), dict)
+            and data[NODE_PROMPT].get("class_type") == "PrimitiveStringMultiline"
+            and isinstance((data[NODE_PROMPT].get("inputs") or {}).get("value"), str)
+        ):
+            self.id_prompt = NODE_PROMPT
+            self.id_prompt_key = "value"
+        else:
+            pid, pkey = _find_user_prompt_inject(data)
+            self.id_prompt = pid or NODE_PROMPT
+            self.id_prompt_key = pkey or "value"
 
         # Negative CLIP (string only) — optional
         self.id_prompt_neg = None
@@ -396,8 +420,81 @@ class ComfyClient:
         )
         return data
 
-    def upload_image(self, image_path: str, overwrite: bool = True) -> str:
-        """Upload local image. Prefer .png with alpha for mask workflows."""
+    @staticmethod
+    def _resolve_load_image_nodes(
+        data: Dict[str, Any],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Return (plate_load_id, mask_load_id).
+
+        Edit_Image_v08: node 80 = plate_srgb, node 123 = mask_luma.
+        Older: single LoadImage → plate only (mask via alpha on same PNG).
+        """
+        load_ids = _find_all_node_ids(data, "LoadImage")
+        if not load_ids:
+            return None, None
+
+        # Fixed v08 ids when present
+        plate = NODE_LOAD_IMAGE if NODE_LOAD_IMAGE in data and NODE_LOAD_IMAGE in load_ids else None
+        mask = NODE_LOAD_MASK if NODE_LOAD_MASK in data and NODE_LOAD_MASK in load_ids else None
+
+        # Mask = LoadImage feeding ImageColorToMask / MaskToImage / etc.
+        if mask is None:
+            mask_consumers = (
+                "ImageColorToMask",
+                "ImageToMask",
+                "MaskToImage",
+                "ConvertMaskToImage",
+            )
+            for ct in mask_consumers:
+                for nid in _find_all_node_ids(data, ct):
+                    img = (data[nid].get("inputs") or {}).get("image")
+                    if isinstance(img, list) and len(img) >= 1:
+                        cand = str(img[0])
+                        if cand in load_ids:
+                            mask = cand
+                            break
+                if mask:
+                    break
+
+        if plate is None:
+            # Prefer LoadImage feeding InpaintCrop / image path (not the mask one)
+            for ct in (
+                "InpaintCropImproved",
+                "SmartImageCrop",
+                "InpaintCrop",
+                "LoadImage",
+            ):
+                for nid in _find_all_node_ids(data, ct):
+                    if ct == "LoadImage":
+                        continue
+                    img = (data[nid].get("inputs") or {}).get("image")
+                    if isinstance(img, list) and len(img) >= 1:
+                        cand = str(img[0])
+                        if cand in load_ids and cand != mask:
+                            plate = cand
+                            break
+                if plate:
+                    break
+
+        if plate is None:
+            for lid in load_ids:
+                if lid != mask:
+                    plate = lid
+                    break
+        if plate is None and load_ids:
+            plate = load_ids[0]
+        if mask == plate:
+            mask = None
+        return plate, mask
+
+    def upload_image(
+        self,
+        image_path: str,
+        overwrite: bool = True,
+        remote_name: Optional[str] = None,
+    ) -> str:
+        """Upload local image. Prefer .png. remote_name sets Comfy input filename."""
         image_path = os.path.abspath(image_path)
         if not os.path.isfile(image_path):
             raise ComfyError(f"Image not found: {image_path}")
@@ -409,7 +506,18 @@ class ComfyClient:
             ext = ".png"
         # Stable-ish name but unique per host so multi-Nuke doesn't clash;
         # overwrite=true so Comfy replaces same basename when reusing local fixed file
-        remote_name = f"nuke_{host}_input_rgba{ext}"
+        if not remote_name:
+            base = Path(image_path).stem.lower()
+            if "mask" in base:
+                remote_name = f"nuke_{host}_mask_luma{ext}"
+            elif "plate" in base or "srgb" in base:
+                remote_name = f"nuke_{host}_plate_srgb{ext}"
+            else:
+                remote_name = f"nuke_{host}_input_rgba{ext}"
+        else:
+            # ensure extension
+            if not Path(remote_name).suffix:
+                remote_name = remote_name + ext
 
         with open(image_path, "rb") as f:
             file_bytes = f.read()
@@ -449,6 +557,7 @@ class ComfyClient:
         seed: Optional[int] = None,
         filename_prefix: Optional[str] = None,
         workflow: Optional[Dict[str, Any]] = None,
+        mask_image_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         if workflow is None:
             if self._workflow_template is None:
@@ -471,13 +580,28 @@ class ComfyClient:
                 return
             wf[node_id].setdefault("inputs", {})[key] = value
 
-        # Image input only for img-edit workflows (txt2img has no LoadImage)
+        # Plate image → primary LoadImage (node 80 on v08)
         if image_name:
             if self.id_load and self.id_load in wf:
                 _set(self.id_load, "image", image_name, required=True)
             # else: pure txt2img — ignore image_name
 
-        # Prompt: PrimitiveStringMultiline.value (e.g. node 73) or CLIP text
+        # Mask image → second LoadImage (node 123 on v08)
+        if mask_image_name:
+            mid = self.id_load_mask
+            if not mid or mid not in wf:
+                # re-resolve from this copy
+                _, mid = self._resolve_load_image_nodes(wf)
+                self.id_load_mask = mid
+            if mid and mid in wf:
+                _set(mid, "image", mask_image_name, required=True)
+            else:
+                raise ComfyError(
+                    "mask_image_name set but workflow has no mask LoadImage "
+                    f"(expected node {NODE_LOAD_MASK})"
+                )
+
+        # Prompt: PrimitiveStringMultiline.value (e.g. node 109) or CLIP text
         if not self.id_prompt or self.id_prompt not in wf:
             # Last chance: PrimitiveStringMultiline titled input / LLM user field
             pid, pkey = _find_user_prompt_inject(wf)
@@ -897,6 +1021,7 @@ class ComfyClient:
         seed: Optional[int] = None,
         output_dir: Optional[str] = None,
         progress: Optional[Callable[[str], None]] = None,
+        mask_image_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         global _JOB_BUSY
 
@@ -917,18 +1042,32 @@ class ComfyClient:
             log("load_workflow")
             self.load_workflow()
             log(
-                f"nodes load={self.id_load} prompt={self.id_prompt}."
-                f"{self.id_prompt_key} crop={self.id_crop} seed={self.id_seed}."
-                f"{self.id_seed_key}"
+                f"nodes plate={self.id_load} mask={self.id_load_mask} "
+                f"prompt={self.id_prompt}.{self.id_prompt_key} "
+                f"crop={self.id_crop} seed={self.id_seed}.{self.id_seed_key}"
             )
 
             # Guard: must upload PNG for alpha mask
             ext = Path(image_path).suffix.lower()
             if ext not in (".png", ".webp"):
-                log(f"WARNING: input is {ext} — prefer PNG RGBA for mask")
+                log(f"WARNING: input is {ext} — prefer PNG")
 
-            log("upload")
-            image_name = self.upload_image(image_path)
+            log("upload plate")
+            image_name = self.upload_image(
+                image_path, remote_name=f"nuke_{socket.gethostname().replace(' ', '_')}_plate_srgb.png"
+            )
+            mask_name = None
+            if mask_image_path:
+                log("upload mask")
+                mask_name = self.upload_image(
+                    mask_image_path,
+                    remote_name=f"nuke_{socket.gethostname().replace(' ', '_')}_mask_luma.png",
+                )
+            elif self.id_load_mask:
+                log(
+                    "WARNING: workflow has mask LoadImage but no mask_image_path — "
+                    "mask node left as template default"
+                )
 
             host = socket.gethostname().replace(" ", "_")
             prefix = (
@@ -941,6 +1080,7 @@ class ComfyClient:
                 prompt=prompt,
                 seed=seed,
                 filename_prefix=prefix,
+                mask_image_name=mask_name,
             )
 
             log("queue")

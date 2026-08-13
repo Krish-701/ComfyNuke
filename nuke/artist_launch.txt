@@ -1,8 +1,8 @@
 # =============================================================================
-# PREFERRED: remote bootstrap (no share / no SSH) — ports 6000 + 8188
+# PREFERRED: remote bootstrap (no share / no SSH) — ports 8600 + 8188
 # =============================================================================
 
-exec(__import__('urllib.request').request.urlopen('http://192.168.91.13:6000/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
+exec(__import__('urllib.request').request.urlopen('http://192.168.91.13:8600/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
 
 # =============================================================================
 # LEGACY: only if you mount a file share (usually NOT used on secure hub)

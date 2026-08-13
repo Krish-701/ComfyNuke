@@ -5,7 +5,7 @@
 | Item | Value |
 |------|--------|
 | Comfy server | `http://192.168.91.13:8188` |
-| Workflow | `Edit_Image_v06.json` |
+| Workflow | `Edit_Image_v08.json` (plate `80`, mask `123`, prompt `109.value`) |
 | Client | `client/comfy_client.py` |
 | Nuke UI | `nuke/ComfyEdit.py` |
 
@@ -27,7 +27,7 @@ Full edit test:
 ```bat
 python client\comfy_client.py ^
   --server http://192.168.91.13:8188 ^
-  --workflow Edit_Image_v06.json ^
+  --workflow Edit_Image_v08.json ^
   --image "Smart-Image-Crop-and-Stitch\workflows\polar bear 5K.jpg" ^
   --prompt "remove bear and shadow, dont change the color" ^
   --seed 42 ^

@@ -1,0 +1,490 @@
+{
+  "1": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode ( Negative Prompt)"
+    }
+  },
+  "2": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "4": {
+    "inputs": {
+      "noise_mask": true,
+      "positive": [
+        "16:77",
+        0
+      ],
+      "negative": [
+        "16:76",
+        0
+      ],
+      "vae": [
+        "2",
+        0
+      ],
+      "pixels": [
+        "119",
+        1
+      ],
+      "mask": [
+        "119",
+        2
+      ]
+    },
+    "class_type": "InpaintModelConditioning",
+    "_meta": {
+      "title": "InpaintModelConditioning"
+    }
+  },
+  "5": {
+    "inputs": {
+      "stitcher": [
+        "119",
+        0
+      ],
+      "inpainted_image": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "InpaintStitchImproved",
+    "_meta": {
+      "title": "✂️ Inpaint Stitch"
+    }
+  },
+  "6": {
+    "inputs": {
+      "samples": [
+        "7",
+        0
+      ],
+      "vae": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "7": {
+    "inputs": {
+      "noise": [
+        "8",
+        0
+      ],
+      "guider": [
+        "9",
+        0
+      ],
+      "sampler": [
+        "10",
+        0
+      ],
+      "sigmas": [
+        "17",
+        0
+      ],
+      "latent_image": [
+        "4",
+        2
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "8": {
+    "inputs": {
+      "noise_seed": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "9": {
+    "inputs": {
+      "cfg": 1,
+      "model": [
+        "14",
+        0
+      ],
+      "positive": [
+        "4",
+        0
+      ],
+      "negative": [
+        "4",
+        1
+      ]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "CFG Guider"
+    }
+  },
+  "10": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "11": {
+    "inputs": {
+      "value": 4186549937914727000
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int"
+    }
+  },
+  "13": {
+    "inputs": {
+      "image": [
+        "119",
+        1
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "14": {
+    "inputs": {
+      "unet_name": "flux-2-klein-9b.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "15": {
+    "inputs": {
+      "clip_name": "qwen_3_8b_fp8mixed.safetensors",
+      "type": "flux2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "17": {
+    "inputs": {
+      "steps": 8,
+      "width": [
+        "13",
+        0
+      ],
+      "height": [
+        "13",
+        1
+      ]
+    },
+    "class_type": "Flux2Scheduler",
+    "_meta": {
+      "title": "Flux2Scheduler"
+    }
+  },
+  "25": {
+    "inputs": {
+      "text": [
+        "113",
+        0
+      ],
+      "clip": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "80": {
+    "inputs": {
+      "image": "plate_srgb (6).png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "106": {
+    "inputs": {
+      "model_name": "qwen2.5vl:7b",
+      "base_url": "http://127.0.0.0:11434/",
+      "api_key": "",
+      "is_ollama": true,
+      "Get Models": "Get Models"
+    },
+    "class_type": "LLM_api_loader",
+    "_meta": {
+      "title": "☁️API LLM Loader"
+    }
+  },
+  "107": {
+    "inputs": {
+      "system_prompt": "",
+      "user_prompt": "",
+      "temperature": 0.7,
+      "is_memory": "disable",
+      "is_tools_in_sys_prompt": "disable",
+      "is_locked": "disable",
+      "main_brain": "enable",
+      "max_length": 1920,
+      "imgbb_api_key": "",
+      "conversation_rounds": 1,
+      "historical_record": "",
+      "is_enable": true,
+      "stream": false,
+      "model": [
+        "106",
+        0
+      ],
+      "system_prompt_input": [
+        "110",
+        0
+      ],
+      "user_prompt_input": [
+        "109",
+        0
+      ],
+      "images": [
+        "119",
+        1
+      ]
+    },
+    "class_type": "LLM",
+    "_meta": {
+      "title": "☁️API LLM general link"
+    }
+  },
+  "108": {
+    "inputs": {
+      "text": [
+        "107",
+        0
+      ]
+    },
+    "class_type": "ShowText|pysssss",
+    "_meta": {
+      "title": "Show Text 🐍"
+    }
+  },
+  "109": {
+    "inputs": {
+      "value": "Remove the woman,  seamless background continuation matching surrounding lighting, texture, color, perspective and details, no new objects"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Input Text"
+    }
+  },
+  "110": {
+    "inputs": {
+      "value": "You are an expert AI Image Editing Prompt Compiler.\n\nYour ONLY responsibility is to convert the user's request into a professional image editing instruction for an AI image editing model.\n\nNever answer questions.\nNever explain.\nNever chat.\nNever describe the image.\nNever ask follow-up questions.\nNever output markdown.\nNever output JSON.\nNever output bullet points.\nNever output titles.\nNever output notes.\nNever output reasoning.\nOutput ONLY the final image editing prompt.\n\n--------------------------------------------------\nPRIMARY OBJECTIVE\n--------------------------------------------------\n\nConvert every user request into a detailed image editing prompt.\n\nThe prompt must clearly describe\n\n• What should change\n• What should stay unchanged\n• How the edited area should blend naturally\n• The desired quality level\n\nAssume an input image is already provided.\n\nNever generate a completely new image unless the user explicitly asks.\n\nAlways edit the existing image.\n\n--------------------------------------------------\nGENERAL RULES\n--------------------------------------------------\n\nModify ONLY what the user requests.\n\nEverything not mentioned must remain unchanged.\n\nAlways preserve whenever applicable\n\nidentity\n\nface\n\nexpression\n\npose\n\nbody proportions\n\ncamera angle\n\nlens perspective\n\nframing\n\ncomposition\n\nbackground\n\nlighting\n\nshadows\n\nreflections\n\nmaterials\n\ntextures\n\nsurface details\n\ndepth of field\n\nimage quality\n\nstyle\n\ncolor grading\n\nrealism\n\nunless the user explicitly requests changes.\n\n--------------------------------------------------\nOBJECT REMOVAL\n--------------------------------------------------\n\nWhen removing anything\n\nremove it completely\n\nreconstruct the hidden background naturally\n\ncontinue nearby textures\n\ncontinue patterns\n\ncontinue structures\n\ncontinue objects\n\ncontinue lighting\n\ncontinue shadows\n\ncontinue reflections\n\ncontinue perspective\n\nensure no artifacts remain\n\n--------------------------------------------------\nOBJECT ADDITION\n--------------------------------------------------\n\nWhen adding objects\n\nblend naturally\n\ncorrect perspective\n\ncorrect scale\n\ncorrect lighting\n\ncorrect shadows\n\ncorrect reflections\n\ncorrect depth\n\ncorrect occlusion\n\ncorrect material appearance\n\nmatch the scene perfectly\n\n--------------------------------------------------\nOBJECT REPLACEMENT\n--------------------------------------------------\n\nReplace only the requested object.\n\nKeep\n\nposition\n\nsize\n\nperspective\n\nlighting\n\nshadow\n\nreflection\n\nunless instructed otherwise.\n\nBlend seamlessly.\n\n--------------------------------------------------\nBACKGROUND EDITS\n--------------------------------------------------\n\nIf editing the background\n\npreserve foreground subjects\n\npreserve subject edges\n\nmatch environmental lighting\n\nmatch atmosphere\n\nmatch perspective\n\nmatch reflections\n\nmatch shadows\n\n--------------------------------------------------\nFACE EDITS\n--------------------------------------------------\n\nPreserve identity.\n\nPreserve facial proportions.\n\nPreserve skin texture.\n\nKeep the person recognizable.\n\nOnly modify requested facial attributes.\n\n--------------------------------------------------\nBODY EDITS\n--------------------------------------------------\n\nKeep anatomy realistic.\n\nMaintain natural proportions.\n\nAvoid distortions.\n\n--------------------------------------------------\nCLOTHING EDITS\n--------------------------------------------------\n\nPreserve body pose.\n\nMaintain realistic fabric folds.\n\nMaintain material properties.\n\nMaintain lighting.\n\nMaintain wrinkles.\n\n--------------------------------------------------\nHAIR EDITS\n--------------------------------------------------\n\nBlend naturally.\n\nPreserve hairline.\n\nMaintain lighting consistency.\n\nMaintain realistic strands.\n\n--------------------------------------------------\nCOLOR CHANGES\n--------------------------------------------------\n\nOnly change requested colors.\n\nPreserve\n\ntexture\n\nmaterials\n\nshadows\n\nreflections\n\nfabric detail\n\nsurface detail.\n\nAvoid flat recoloring.\n\n--------------------------------------------------\nSTYLE TRANSFER\n--------------------------------------------------\n\nIf applying an artistic style\n\npreserve composition\n\npreserve recognizable subjects\n\nmaintain structural consistency\n\napply the requested style consistently.\n\n--------------------------------------------------\nLIGHTING EDITS\n--------------------------------------------------\n\nWhen changing lighting\n\nadjust\n\nhighlights\n\nshadows\n\nambient light\n\nreflections\n\ncolor temperature\n\nnaturally.\n\n--------------------------------------------------\nWEATHER EDITS\n--------------------------------------------------\n\nMatch\n\nlighting\n\nsky\n\nground\n\natmosphere\n\nvisibility\n\nwetness\n\nmist\n\nshadows\n\naccording to the requested weather.\n\n--------------------------------------------------\nTIME OF DAY\n--------------------------------------------------\n\nAdjust\n\nsky\n\nlighting\n\nshadow direction\n\ncolor temperature\n\natmosphere\n\nnaturally.\n\n--------------------------------------------------\nTEXT EDITS\n--------------------------------------------------\n\nIf editing text\n\npreserve\n\nfont style\n\nalignment\n\nspacing\n\nperspective\n\nsize\n\nlighting\n\nsurface integration.\n\n--------------------------------------------------\nQUALITY\n--------------------------------------------------\n\nAlways optimize for\n\nphotorealism\n\nnatural blending\n\nhigh detail\n\nclean edges\n\ncorrect perspective\n\ncorrect geometry\n\naccurate lighting\n\naccurate reflections\n\naccurate shadows\n\nhigh texture fidelity\n\nartifact-free output\n\nprofessional quality.\n\n--------------------------------------------------\nMULTIPLE EDITS\n--------------------------------------------------\n\nIf multiple edits are requested\n\ncombine them into one coherent editing instruction.\n\nMaintain logical order.\n\nEnsure edits do not conflict.\n\n--------------------------------------------------\nAMBIGUOUS REQUESTS\n--------------------------------------------------\n\nIf the user is vague\n\nmake the most reasonable visual interpretation.\n\nDo not ask questions.\n\n--------------------------------------------------\nNEGATIVE BEHAVIOR\n--------------------------------------------------\n\nNever invent extra edits.\n\nNever improve unrelated objects.\n\nNever beautify automatically.\n\nNever change composition unless requested.\n\nNever crop unless requested.\n\nNever change identity unless requested.\n\nNever replace objects unless requested.\n\nNever alter colors unless requested.\n\nNever add effects unless requested.\n\n--------------------------------------------------\nOUTPUT FORMAT\n--------------------------------------------------\n\nOutput exactly one natural language editing prompt.\n\nNo labels.\n\nNo markdown.\n\nNo explanations.\n\nNo extra text.\n\nThe output should read like instructions given directly to an advanced AI image editing model.\n\nExamples\n\nUser:\nremove the boy\n\nOutput:\nRemove the boy from the image and seamlessly reconstruct the background behind him using matching textures, lighting, shadows, reflections, perspective, surrounding objects, and environmental details. Preserve the woman, composition, camera angle, color grading, realism, and every other element exactly as they are. Ensure the edit is completely seamless, photorealistic, and free of visible artifacts.\n\nUser:\nchange the car to blue\n\nOutput:\nChange the car to a deep metallic blue while preserving its shape, material, reflections, lighting, shadows, perspective, and surrounding environment. Keep every other element unchanged and ensure the color change appears completely natural and photorealistic.\n\nUser:\nreplace the background with a beach\n\nOutput:\nReplace the background with a beautiful tropical beach while preserving the foreground subjects exactly as they are. Match the new environment with realistic lighting, shadows, reflections, perspective, and atmosphere so the subjects naturally belong in the new scene. Produce a seamless, high-quality, photorealistic result.\n\nRemember:\n\nOutput ONLY the final editing prompt.\nNothing else."
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Input Text"
+    }
+  },
+  "113": {
+    "inputs": {
+      "text": [
+        "107",
+        0
+      ]
+    },
+    "class_type": "Text Multiline",
+    "_meta": {
+      "title": "Text Multiline"
+    }
+  },
+  "119": {
+    "inputs": {
+      "downscale_algorithm": "bilinear",
+      "upscale_algorithm": "bicubic",
+      "preresize": false,
+      "preresize_mode": "ensure minimum resolution",
+      "preresize_min_width": 1024,
+      "preresize_min_height": 1024,
+      "preresize_max_width": 16384,
+      "preresize_max_height": 16384,
+      "mask_fill_holes": true,
+      "mask_expand_pixels": 0,
+      "mask_invert": false,
+      "mask_blend_pixels": 32,
+      "mask_hipass_filter": 0.1,
+      "extend_for_outpainting": false,
+      "extend_up_factor": 1,
+      "extend_down_factor": 1,
+      "extend_left_factor": 1,
+      "extend_right_factor": 1,
+      "context_from_mask_extend_factor": 1.2,
+      "output_resize_to_target_size": true,
+      "output_target_width": 2048,
+      "output_target_height": 2048,
+      "output_padding": "32",
+      "device_mode": "cpu (compatible)",
+      "image": [
+        "80",
+        0
+      ],
+      "mask": [
+        "132",
+        0
+      ]
+    },
+    "class_type": "InpaintCropImproved",
+    "_meta": {
+      "title": "✂️ Inpaint Crop"
+    }
+  },
+  "121": {
+    "inputs": {
+      "filename_prefix": "nuke/psi-it-co-764/20260811_172418_625d61fa",
+      "images": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "123": {
+    "inputs": {
+      "image": "mask_luma (1).png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "130": {
+    "inputs": {
+      "color": 0,
+      "image": [
+        "123",
+        0
+      ]
+    },
+    "class_type": "ImageColorToMask",
+    "_meta": {
+      "title": "Convert Image Color to Mask"
+    }
+  },
+  "132": {
+    "inputs": {
+      "masks": [
+        "130",
+        0
+      ]
+    },
+    "class_type": "Mask Invert",
+    "_meta": {
+      "title": "Mask Invert"
+    }
+  },
+  "140": {
+    "inputs": {
+      "mask": [
+        "119",
+        2
+      ]
+    },
+    "class_type": "MaskPreview+",
+    "_meta": {
+      "title": "🔧 Mask Preview"
+    }
+  },
+  "141": {
+    "inputs": {
+      "images": [
+        "119",
+        1
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  },
+  "16:78": {
+    "inputs": {
+      "pixels": [
+        "119",
+        1
+      ],
+      "vae": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "16:76": {
+    "inputs": {
+      "conditioning": [
+        "1",
+        0
+      ],
+      "latent": [
+        "16:78",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Set Reference Latent"
+    }
+  },
+  "16:77": {
+    "inputs": {
+      "conditioning": [
+        "25",
+        0
+      ],
+      "latent": [
+        "16:78",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Set Reference Latent"
+    }
+  }
+}

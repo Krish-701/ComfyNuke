@@ -4,8 +4,9 @@ Nuke panel for ComfyUI Edit_Image (PNG RGBA + crop/inpaint/stitch).
 Always uploads PNG with alpha (never raw JPG).
 Per-session temp files under %TEMP%/comfy_nuke/<host>_<pid>/ (multi-user safe).
 
-Workflow default: Edit_Image_v06.json
-  LoadImage → mask → InpaintCrop → LLM (node 289 user text) → Qwen edit → Stitch → Save
+Workflow default: Edit_Image_v08.json
+  LoadImage 80 = plate_srgb.png, LoadImage 123 = mask_luma.png
+  → crop/inpaint → LLM (node 109.value) → Qwen edit → Stitch → Save
 
 LOAD (artists — multi-user hub):
   exec(open(r"//YOUR_SERVER/ComfyNuke/nuke/launch.py", encoding="utf-8").read())
@@ -93,12 +94,97 @@ else:
 CLIENT_DIR = os.path.join(REPO_ROOT, "client")
 _STUDIO = _load_studio_config(REPO_ROOT)
 
-DEFAULT_WORKFLOW = os.path.join(REPO_ROOT, "Edit_Image_v06.json").replace("\\", "/")
+DEFAULT_WORKFLOW = os.path.join(REPO_ROOT, "Edit_Image_v08.json").replace("\\", "/")
 IMAGE_GEN_WORKFLOW = os.path.join(REPO_ROOT, "Image_generation_v01.json").replace(
     "\\", "/"
 )
 I2V_WORKFLOW = os.path.join(REPO_ROOT, "video_minimax_h3_i2v.json").replace("\\", "/")
-DEFAULT_SERVER = str(_STUDIO.get("server") or "http://192.168.91.13:8188").rstrip("/")
+_raw_server = str(
+    _STUDIO.get("server") or "http://192.168.91.13:8600/comfyui"
+).rstrip("/")
+# Force gated proxy so Access Control IP off = no generations
+if _raw_server.endswith(":8188") or (
+    _raw_server.startswith("http") and "/comfyui" not in _raw_server and ":8600" in _raw_server
+):
+    _code = (
+        (os.environ.get("COMFYNUKE_CODE_BASE") or "").strip()
+        or str(_STUDIO.get("code_base_url") or "").strip()
+        or "http://192.168.91.13:8600"
+    ).rstrip("/")
+    if _raw_server.endswith(":8188"):
+        DEFAULT_SERVER = _code + "/comfyui"
+    elif _raw_server.rstrip("/").endswith(":8600"):
+        DEFAULT_SERVER = _raw_server + "/comfyui"
+    else:
+        DEFAULT_SERVER = _raw_server
+else:
+    DEFAULT_SERVER = _raw_server
+# Default artist prompt for Edit Image panel (appended / shown in Nuke UI)
+DEFAULT_EDIT_PROMPT = (
+    "seamless background continuation matching surrounding lighting, "
+    "texture, color, perspective and details, no new objects"
+)
+# Nuke menu name (was "ComfyUI")
+MENU_NAME = "Pix-Edit"
+
+# Built-in prompt library (seed only). User edits are saved LOCAL to this machine:
+#   ~/.comfynuke/prompt_examples.json  (or %USERPROFILE%\.comfynuke\...)
+# Artists copy text into Edit Image manually — examples never auto-run jobs.
+DEFAULT_PROMPT_LIBRARY = [
+    {
+        "title": "1. Remove subject + seamless bg",
+        "text": (
+            "remove the [person/object] and fill with seamless continuation of the "
+            "existing background matching exact lighting, texture, color, perspective "
+            "and shadows, no new objects"
+        ),
+    },
+    {
+        "title": "2. Remove + clean empty space",
+        "text": (
+            "remove the [objects/people] and create clean empty space matching "
+            "surrounding lighting, texture and color, seamless and photorealistic"
+        ),
+    },
+    {
+        "title": "3. Remove + reconstruct background",
+        "text": (
+            "remove the [subject] completely and reconstruct the background behind it "
+            "matching original lighting direction, texture and color, no artifacts"
+        ),
+    },
+    {
+        "title": "4. Clean plate fill",
+        "text": (
+            "remove [unwanted elements] and fill with pure clean continuation of the "
+            "existing background matching scene lighting, shadows and perspective for "
+            "a clean plate look"
+        ),
+    },
+    {
+        "title": "5. Replace object",
+        "text": (
+            "replace the [old object] with [new object description] matching scene "
+            "lighting, scale, perspective, shadows and style, seamlessly integrated"
+        ),
+    },
+    {
+        "title": "6. Add object",
+        "text": (
+            "add [new object description] naturally placed on [surface/location], "
+            "correct scale and perspective, matching lighting, contact shadows and "
+            "reflections"
+        ),
+    },
+    {
+        "title": "7. Extend background",
+        "text": (
+            "extend the background seamlessly with more of the existing "
+            "[background type] matching lighting, texture, color and perspective, "
+            "no new focal objects"
+        ),
+    },
+]
 
 # Downloads: prefer local per-user folder (never write into shared server tree)
 _host = socket.gethostname().replace(" ", "_")
@@ -126,7 +212,7 @@ STUDIO_CONFIG_PATH = _STUDIO.get("_config_path") or ""
 CODE_BASE_URL = (
     (os.environ.get("COMFYNUKE_CODE_BASE") or "").strip()
     or str(_STUDIO.get("code_base_url") or "").strip()
-    or "http://192.168.91.13:6000"
+    or "http://192.168.91.13:8600"
 ).rstrip("/")
 
 # True while export+Comfy job is active (one at a time PER Nuke session)
@@ -137,7 +223,7 @@ _POLL_STATE = None  # type: ignore
 
 def _refresh_workflow_from_server(wf_path, timeout=60):
     """
-    Always pull the named workflow from the code server (:6000) into the local
+    Always pull the named workflow from the code server (:8600) into the local
     path before a job runs. Fixes stale ~/.comfynuke/cache copies after the
     hub Edit_Image / gen / i2v JSON is updated on Ubuntu.
     Returns the path used (same as wf_path on success or if refresh skipped).
@@ -262,6 +348,86 @@ def _qt_gui():
         except Exception:
             continue
     return None, None
+
+
+def _qt_widgets():
+    """Return (QtWidgets, QtGui, QtCore) for dialogs, or (None, None, None)."""
+    for base in ("PySide2", "PySide6"):
+        try:
+            QtWidgets = __import__(base + ".QtWidgets", fromlist=["QtWidgets"])
+            QtGui = __import__(base + ".QtGui", fromlist=["QtGui"])
+            QtCore = __import__(base + ".QtCore", fromlist=["QtCore"])
+            return QtWidgets, QtGui, QtCore
+        except Exception:
+            continue
+    return None, None, None
+
+
+def _prompt_library_path():
+    """Local-only store (per artist machine, not on the hub)."""
+    home = os.path.expanduser("~")
+    up = os.environ.get("USERPROFILE") or ""
+    base = up if up and os.name == "nt" else home
+    folder = os.path.join(base, ".comfynuke")
+    return os.path.join(folder, "prompt_examples.json")
+
+
+def _default_prompt_library():
+    return [dict(x) for x in DEFAULT_PROMPT_LIBRARY]
+
+
+def load_prompt_library():
+    """Load local prompt library; seed defaults if missing/corrupt."""
+    path = _prompt_library_path()
+    if not os.path.isfile(path):
+        return _default_prompt_library()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get("prompts"), list):
+            items = data["prompts"]
+        elif isinstance(data, list):
+            items = data
+        else:
+            return _default_prompt_library()
+        out = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            title = str(it.get("title") or "").strip() or "Untitled"
+            text = str(it.get("text") or "").strip()
+            if not text:
+                continue
+            out.append({"title": title, "text": text})
+        return out if out else _default_prompt_library()
+    except Exception as e:
+        _log("prompt library load failed: %s — using defaults" % e)
+        return _default_prompt_library()
+
+
+def save_prompt_library(items):
+    """Save prompt list to local ~/.comfynuke/prompt_examples.json only."""
+    path = _prompt_library_path()
+    folder = os.path.dirname(path)
+    if folder and not os.path.isdir(folder):
+        os.makedirs(folder)
+    clean = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        title = str(it.get("title") or "").strip() or "Untitled"
+        text = str(it.get("text") or "").strip()
+        if not text:
+            continue
+        clean.append({"title": title, "text": text})
+    payload = {
+        "version": 1,
+        "local_only": True,
+        "prompts": clean,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+    return path
 
 
 def _ensure_temp_dir():
@@ -1301,6 +1467,69 @@ def _build_rgba_from_plate_and_mask_luma(plate_path, mask_path, out_path):
     return out_path
 
 
+def _write_mask_luma_solid(plate_path, out_path, value=255):
+    """Grayscale RGB PNG same size as plate; white=edit mask, black=keep."""
+    _ensure_temp_dir()
+    try:
+        from PIL import Image
+
+        im = Image.open(plate_path)
+        w, h = im.size
+        g = Image.new("L", (w, h), int(value) & 255)
+        Image.merge("RGB", (g, g, g)).save(out_path, "PNG")
+        return out_path
+    except Exception as e:
+        _log("PIL solid mask failed (%s) — Qt" % e)
+    QtGui, _ = _qt_gui()
+    if QtGui is None:
+        raise RuntimeError("Cannot write solid mask_luma")
+    plate = QtGui.QImage(plate_path)
+    if plate.isNull():
+        raise RuntimeError("Failed to load plate for mask size: %s" % plate_path)
+    w, h = plate.width(), plate.height()
+    img = QtGui.QImage(w, h, QtGui.QImage.Format_RGB32)
+    img.fill((int(value) << 16) | (int(value) << 8) | int(value) | 0xFF000000)
+    if not img.save(out_path, "PNG"):
+        raise RuntimeError("Failed to save solid mask: %s" % out_path)
+    return out_path
+
+
+def _write_mask_luma_box(plate_path, mask_box, out_path, feather=12):
+    """White rect mask (edit) on black background, same size as plate."""
+    _ensure_temp_dir()
+    QtGui, QtCore = _qt_gui()
+    if QtGui is None:
+        # Fallback solid if no Qt
+        return _write_mask_luma_solid(plate_path, out_path, 255)
+    plate = QtGui.QImage(plate_path)
+    if plate.isNull():
+        raise RuntimeError("Failed to load plate for mask: %s" % plate_path)
+    w, h = plate.width(), plate.height()
+    x0, y0, x1, y1 = mask_box
+    x0 = max(0, min(w, int(x0)))
+    x1 = max(0, min(w, int(x1)))
+    y0 = max(0, min(h, int(y0)))
+    y1 = max(0, min(h, int(y1)))
+    img = QtGui.QImage(w, h, QtGui.QImage.Format_RGB32)
+    img.fill(0xFF000000)
+    painter = QtGui.QPainter(img)
+    painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+    painter.setPen(QtCore.Qt.NoPen)
+    if feather and feather > 0:
+        steps = max(1, int(feather))
+        for i in range(steps, 0, -1):
+            g = int(255 * (1.0 - (i / float(steps + 1))))
+            painter.setBrush(QtGui.QColor(g, g, g))
+            pad = i
+            painter.drawRect(x0 - pad, y0 - pad, (x1 - x0) + 2 * pad, (y1 - y0) + 2 * pad)
+    painter.setBrush(QtGui.QColor(255, 255, 255))
+    painter.drawRect(x0, y0, max(1, x1 - x0), max(1, y1 - y0))
+    painter.end()
+    if not img.save(out_path, "PNG"):
+        raise RuntimeError("Failed to save box mask: %s" % out_path)
+    return out_path
+
+
 def _build_rgba_full_frame_alpha(plate_path, out_path):
     """
     Full-frame edit: RGB = plate, A = 255 everywhere (whole image is the mask).
@@ -1537,6 +1766,8 @@ def export_frame_for_comfy(node, frame, tmp_dir=None):
     if full_frame_mode:
         _log("No Roto — FULL FRAME edit (alpha solid white on whole image)")
         _build_rgba_full_frame_alpha(plate_png, TEMP_INPUT_RGBA)
+        # v08: separate mask LoadImage needs mask_luma.png (solid white)
+        _write_mask_luma_solid(plate_png, TEMP_MASK_LUMA, 255)
         stats = get_alpha_stats(TEMP_INPUT_RGBA)
         # Full frame: all A=255 is intentional and valid
         if stats.get("min") == 255 and stats.get("max") == 255:
@@ -1546,7 +1777,7 @@ def export_frame_for_comfy(node, frame, tmp_dir=None):
             stats["has_alpha"] = True
         method = "full_frame"
         full_frame_ok = True
-        _log("full-frame RGBA ready (A=255 everywhere)")
+        _log("full-frame RGBA ready (A=255 everywhere); mask_luma solid white")
 
     # --- 2b) ROTO: shape mask (unchanged path — do not alter when Roto present) ---
     if method is None and roto is not None and not selected_is_read:
@@ -1645,6 +1876,11 @@ def export_frame_for_comfy(node, frame, tmp_dir=None):
             _build_rgba_full_rgb_masked_alpha_fast(
                 plate_png, mask_box, TEMP_INPUT_RGBA, feather=12
             )
+            # v08 dual LoadImage: also write rect mask_luma.png for node 123
+            try:
+                _write_mask_luma_box(plate_png, mask_box, TEMP_MASK_LUMA, feather=12)
+            except Exception as e:
+                _log("mask_luma box write failed: %s" % e)
             stats = ensure_alpha_like_bear(TEMP_INPUT_RGBA)
             if not stats.get("ok"):
                 raise RuntimeError(
@@ -1699,12 +1935,32 @@ def export_frame_for_comfy(node, frame, tmp_dir=None):
             )
         )
 
+    # Canonical paths for v08 dual LoadImage (plate node 80, mask node 123)
+    plate_out = TEMP_PLATE_SRGB
+    try:
+        if os.path.abspath(plate_png) != os.path.abspath(plate_out):
+            shutil.copy2(plate_png, plate_out)
+        elif not os.path.isfile(plate_out):
+            shutil.copy2(plate_png, plate_out)
+    except Exception:
+        plate_out = plate_png
+    if not os.path.isfile(TEMP_MASK_LUMA):
+        # Should not happen — last resort solid white
+        _log("mask_luma missing after export — writing solid white fallback")
+        _write_mask_luma_solid(plate_out, TEMP_MASK_LUMA, 255)
+
     _log(
         "WRITE COMPLETE — ALPHA OK method=%s min=%s max=%s frac_mask=%.3f"
         % (method, stats["min"], stats["max"], stats.get("frac_high") or 0)
     )
-    _log("Next: upload + queue Comfy (then poll in background)")
-    return TEMP_INPUT_RGBA, method
+    _log("plate_srgb → %s (%s bytes)" % (plate_out, os.path.getsize(plate_out)))
+    _log(
+        "mask_luma  → %s (%s bytes)"
+        % (TEMP_MASK_LUMA, os.path.getsize(TEMP_MASK_LUMA))
+    )
+    _log("Next: upload plate+mask + queue Comfy (then poll in background)")
+    # (plate_path, mask_path, method) — v08 dual LoadImage
+    return plate_out, TEMP_MASK_LUMA, method
 
 
 def _finish_job_ok(result, source_name, frame_i):
@@ -1930,7 +2186,7 @@ def run_edit_on_node(
     os.makedirs(out_dir, exist_ok=True)
 
     wf_path = workflow or DEFAULT_WORKFLOW
-    # Prefer latest edit workflow on disk (v06); migrate any older name.
+    # Prefer latest edit workflow on disk (v08); migrate any older name.
     for old in (
         "Edit_Image_API.json",
         "Edit_Image_v01.json",
@@ -1938,27 +2194,39 @@ def run_edit_on_node(
         "Edit_Image_v03.json",
         "Edit_Image_v04.json",
         "Edit_Image_v05.json",
+        "Edit_Image_v06.json",
+        "Edit_Image_v07.json",
     ):
         if wf_path.endswith(old):
-            newer = os.path.join(REPO_ROOT, "Edit_Image_v06.json")
+            newer = os.path.join(REPO_ROOT, "Edit_Image_v08.json")
             if os.path.isfile(newer):
                 wf_path = newer
             break
-    # If default path missing but only older file exists, still try v06 name for server pull
-    if not os.path.isfile(wf_path) and not str(wf_path).endswith("Edit_Image_v06.json"):
-        cand = os.path.join(REPO_ROOT, "Edit_Image_v06.json")
+    # If default path missing, still use v08 name so server pull can fill it.
+    if not os.path.isfile(wf_path) and not str(wf_path).endswith("Edit_Image_v08.json"):
+        cand = os.path.join(REPO_ROOT, "Edit_Image_v08.json")
         wf_path = cand
 
     # Always take the hub's latest graph before this job (not the Nuke cache).
     wf_path = _refresh_workflow_from_server(wf_path)
 
-    # --- Phase 1: Nuke Write ---
+    # --- Phase 1: Nuke Write (plate_srgb + mask_luma) ---
     _BG_JOB_ACTIVE = True
     try:
         _log("Export starting (Write)…")
-        in_path, method = export_frame_for_comfy(node, frame)
-        if not in_path.lower().endswith(".png"):
-            raise RuntimeError("Internal error: export must be PNG, got %s" % in_path)
+        exported = export_frame_for_comfy(node, frame)
+        if isinstance(exported, (tuple, list)) and len(exported) >= 3:
+            plate_path, mask_path, method = exported[0], exported[1], exported[2]
+        elif isinstance(exported, (tuple, list)) and len(exported) == 2:
+            # legacy single-file export
+            plate_path, method = exported[0], exported[1]
+            mask_path = TEMP_MASK_LUMA if os.path.isfile(TEMP_MASK_LUMA) else None
+        else:
+            plate_path, mask_path, method = exported, None, "unknown"
+        if not str(plate_path).lower().endswith(".png"):
+            raise RuntimeError("Internal error: plate must be PNG, got %s" % plate_path)
+        if mask_path and not os.path.isfile(mask_path):
+            mask_path = None
     except Exception:
         _BG_JOB_ACTIVE = False
         raise
@@ -1966,13 +2234,17 @@ def run_edit_on_node(
     node_name = node.name()
     prompt_s = str(prompt).strip()
     _log(
-        "Export done (%s, %s bytes). Temp Write closed."
-        % (method, os.path.getsize(in_path))
+        "Export done (%s). plate=%s bytes mask=%s bytes"
+        % (
+            method,
+            os.path.getsize(plate_path) if os.path.isfile(plate_path) else 0,
+            os.path.getsize(mask_path) if mask_path and os.path.isfile(mask_path) else 0,
+        )
     )
     _log("Workflow: %s" % wf_path)
     _log("Server: %s" % server)
 
-    # --- Phase 2: upload + queue (main thread, usually a few seconds) ---
+    # --- Phase 2: upload plate + mask + queue (main thread) ---
     try:
         client = ComfyClient(
             server=server,
@@ -1980,34 +2252,51 @@ def run_edit_on_node(
             timeout_sec=600.0,
             poll_interval_sec=2.0,
         )
-        _log("Uploading to Comfy…")
+        _log("Uploading plate_srgb + mask_luma to Comfy…")
         client.load_workflow()
-        image_name = client.upload_image(in_path)
         import time as _time
         import socket as _socket
 
         host = _socket.gethostname().replace(" ", "_")
+        plate_name = client.upload_image(
+            plate_path, remote_name="nuke_%s_plate_srgb.png" % host
+        )
+        mask_name = None
+        if mask_path and os.path.isfile(mask_path):
+            mask_name = client.upload_image(
+                mask_path, remote_name="nuke_%s_mask_luma.png" % host
+            )
+        elif client.id_load_mask:
+            raise RuntimeError(
+                "Workflow needs mask LoadImage (node %s) but mask_luma.png was not written"
+                % client.id_load_mask
+            )
         stamp = "%s_%s" % (
             _time.strftime("%Y%m%d_%H%M%S"),
             uuid.uuid4().hex[:8],
         )
         prefix = "nuke/%s/%s" % (host, stamp)
         wf = client.build_prompt(
-            image_name=image_name,
+            image_name=plate_name,
             prompt=prompt_s,
             seed=seed,
             filename_prefix=prefix,
+            mask_image_name=mask_name,
         )
         _log(
-            "Inject: load=%s prompt=%s.%s seed=%s.%s"
+            "Inject: plate=%s mask=%s prompt=%s.%s seed=%s.%s"
             % (
                 client.id_load,
+                client.id_load_mask,
                 client.id_prompt,
                 client.id_prompt_key,
                 client.id_seed,
                 client.id_seed_key,
             )
         )
+        _log("plate file → node %s: %s" % (client.id_load, plate_name))
+        if mask_name:
+            _log("mask  file → node %s: %s" % (client.id_load_mask, mask_name))
         _log("Prompt text → node %s: %s" % (client.id_prompt, prompt_s[:120]))
         _log("Queueing Comfy job…")
         prompt_id = client.queue_prompt(wf)
@@ -2545,21 +2834,26 @@ def schedule_edit(
     _schedule_ms(50 if _attempt == 0 else 250, _job)
 
 
-def show_panel():
+def show_panel(initial_prompt=None):
+    """Open Edit Image panel. Optional initial_prompt pre-fills the prompt field."""
     if nuke is None:
         raise RuntimeError("Must run inside Nuke")
 
     import nukescripts  # type: ignore
 
+    start_prompt = (
+        str(initial_prompt).strip() if initial_prompt else DEFAULT_EDIT_PROMPT
+    )
+
     class ComfyEditPanel(nukescripts.PythonPanel):
-        def __init__(self):
-            nukescripts.PythonPanel.__init__(self, "ComfyUI Edit Image")
+        def __init__(self, prompt_text):
+            nukescripts.PythonPanel.__init__(self, "Pix-Edit Image")
             self.server = nuke.String_Knob("server", "Server")
             self.server.setValue(DEFAULT_SERVER)
             self.workflow = nuke.File_Knob("workflow", "Workflow")
             self.workflow.setValue(DEFAULT_WORKFLOW)
             self.prompt = nuke.Multiline_Eval_String_Knob("prompt", "Prompt")
-            self.prompt.setValue("remove bear and shadow, dont change the color")
+            self.prompt.setValue(prompt_text)
             self.seed = nuke.Int_Knob("seed", "Seed")
             self.seed.setValue(42)
             self.use_random_seed = nuke.Boolean_Knob("use_random", "Random seed")
@@ -2570,9 +2864,11 @@ def show_panel():
             self.help_txt = nuke.Text_Knob(
                 "help_txt",
                 "",
-                "<b>Roto1</b> = edit masked region only.<br>"
-                "<b>Read1 only</b> (no Roto) = full-frame edit (whole image alpha).<br>"
-                "Write → Comfy poll (log). Popup when done. Random seed ON.",
+                "<b>Roto1</b> = edit masked region only "
+                "(plate → LoadImage 80, mask_luma → LoadImage 123).<br>"
+                "<b>Read1 only</b> (no Roto) = full-frame edit.<br>"
+                "Edit prompt before OK. "
+                "Library: Pix-Edit → Prompt Examples… (copy/paste).",
             )
             for k in (
                 self.server,
@@ -2589,7 +2885,7 @@ def show_panel():
     node = sel[0] if sel else None
     frame = int(nuke.frame())
 
-    p = ComfyEditPanel()
+    p = ComfyEditPanel(start_prompt)
     if not p.showModalDialog():
         nuke.tprint("[ComfyEdit] Cancelled")
         return
@@ -2611,6 +2907,309 @@ def show_panel():
         output_dir=p.out_dir.value() or DEFAULT_OUT,
         frame=frame,
     )
+
+
+def show_prompt_examples_panel():
+    """
+    Single-click Prompt Examples library (local only).
+    View all prompts, add / edit / remove, Save, Copy text — paste into Edit Image.
+    Does not run Comfy jobs.
+    """
+    if nuke is None:
+        raise RuntimeError("Must run inside Nuke")
+
+    QtWidgets, QtGui, QtCore = _qt_widgets()
+    if QtWidgets is None:
+        return _show_prompt_examples_nuke_panel()
+
+    items = load_prompt_library()
+
+    class PromptLibDialog(QtWidgets.QDialog):
+        def __init__(self, parent=None):
+            QtWidgets.QDialog.__init__(self, parent)
+            self.setWindowTitle("Pix-Edit · Prompt Examples (local)")
+            self.resize(720, 480)
+            self._items = [dict(x) for x in items]
+            self._block = False
+
+            root = QtWidgets.QVBoxLayout(self)
+            hint = QtWidgets.QLabel(
+                "Local library only — saved on this PC "
+                "(~/.comfynuke/prompt_examples.json). "
+                "Copy a prompt, then paste into Pix-Edit → Edit Image."
+            )
+            hint.setWordWrap(True)
+            root.addWidget(hint)
+
+            split = QtWidgets.QHBoxLayout()
+            root.addLayout(split, 1)
+
+            left = QtWidgets.QVBoxLayout()
+            split.addLayout(left, 1)
+            left.addWidget(QtWidgets.QLabel("Prompts"))
+            self.list = QtWidgets.QListWidget()
+            left.addWidget(self.list, 1)
+            row_btn = QtWidgets.QHBoxLayout()
+            self.btn_add = QtWidgets.QPushButton("Add")
+            self.btn_dup = QtWidgets.QPushButton("Duplicate")
+            self.btn_del = QtWidgets.QPushButton("Remove")
+            row_btn.addWidget(self.btn_add)
+            row_btn.addWidget(self.btn_dup)
+            row_btn.addWidget(self.btn_del)
+            left.addLayout(row_btn)
+
+            right = QtWidgets.QVBoxLayout()
+            split.addLayout(right, 2)
+            right.addWidget(QtWidgets.QLabel("Title / short name"))
+            self.title_edit = QtWidgets.QLineEdit()
+            right.addWidget(self.title_edit)
+            right.addWidget(QtWidgets.QLabel("Prompt text (edit freely)"))
+            self.body = QtWidgets.QPlainTextEdit()
+            self.body.setMinimumHeight(220)
+            right.addWidget(self.body, 1)
+
+            bottom = QtWidgets.QHBoxLayout()
+            self.path_lbl = QtWidgets.QLabel(_prompt_library_path())
+            self.path_lbl.setStyleSheet("color: gray; font-size: 11px;")
+            bottom.addWidget(self.path_lbl, 1)
+            self.btn_reset = QtWidgets.QPushButton("Reset defaults")
+            self.btn_copy = QtWidgets.QPushButton("Copy prompt")
+            self.btn_save = QtWidgets.QPushButton("Save")
+            self.btn_close = QtWidgets.QPushButton("Close")
+            bottom.addWidget(self.btn_reset)
+            bottom.addWidget(self.btn_copy)
+            bottom.addWidget(self.btn_save)
+            bottom.addWidget(self.btn_close)
+            root.addLayout(bottom)
+
+            self.list.currentRowChanged.connect(self._on_select)
+            self.title_edit.textEdited.connect(self._on_edit_title)
+            self.body.textChanged.connect(self._on_edit_body)
+            self.btn_add.clicked.connect(self._add)
+            self.btn_dup.clicked.connect(self._dup)
+            self.btn_del.clicked.connect(self._del)
+            self.btn_save.clicked.connect(self._save)
+            self.btn_copy.clicked.connect(self._copy)
+            self.btn_reset.clicked.connect(self._reset)
+            self.btn_close.clicked.connect(self.accept)
+
+            self._reload_list(0)
+
+        def _reload_list(self, select_row=0):
+            self._block = True
+            self.list.clear()
+            for it in self._items:
+                self.list.addItem(it.get("title") or "Untitled")
+            self._block = False
+            if self._items:
+                row = max(0, min(select_row, len(self._items) - 1))
+                self.list.setCurrentRow(row)
+            else:
+                self.title_edit.clear()
+                self.body.clear()
+
+        def _on_select(self, row):
+            if self._block or row < 0 or row >= len(self._items):
+                return
+            self._block = True
+            it = self._items[row]
+            self.title_edit.setText(it.get("title") or "")
+            self.body.setPlainText(it.get("text") or "")
+            self._block = False
+
+        def _cur(self):
+            return self.list.currentRow()
+
+        def _on_edit_title(self, text):
+            if self._block:
+                return
+            row = self._cur()
+            if row < 0 or row >= len(self._items):
+                return
+            self._items[row]["title"] = text
+            self._block = True
+            item = self.list.item(row)
+            if item:
+                item.setText(text or "Untitled")
+            self._block = False
+
+        def _on_edit_body(self):
+            if self._block:
+                return
+            row = self._cur()
+            if row < 0 or row >= len(self._items):
+                return
+            self._items[row]["text"] = self.body.toPlainText()
+
+        def _add(self):
+            self._items.append(
+                {
+                    "title": "New prompt %s" % (len(self._items) + 1),
+                    "text": "describe the edit…",
+                }
+            )
+            self._reload_list(len(self._items) - 1)
+
+        def _dup(self):
+            row = self._cur()
+            if row < 0 or row >= len(self._items):
+                return
+            src = self._items[row]
+            self._items.insert(
+                row + 1,
+                {
+                    "title": (src.get("title") or "Prompt") + " (copy)",
+                    "text": src.get("text") or "",
+                },
+            )
+            self._reload_list(row + 1)
+
+        def _del(self):
+            row = self._cur()
+            if row < 0 or row >= len(self._items):
+                return
+            del self._items[row]
+            self._reload_list(min(row, len(self._items) - 1))
+
+        def _save(self):
+            try:
+                path = save_prompt_library(self._items)
+                self.path_lbl.setText("Saved: " + path)
+                _log("Prompt library saved (local): %s" % path)
+                try:
+                    nuke.message("Saved locally:\n%s" % path)
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    nuke.message("Save failed:\n%s" % e)
+                except Exception:
+                    pass
+
+        def _copy(self):
+            text = self.body.toPlainText().strip()
+            if not text:
+                try:
+                    nuke.message("Nothing to copy — select or write a prompt.")
+                except Exception:
+                    pass
+                return
+            try:
+                cb = QtWidgets.QApplication.clipboard()
+                cb.setText(text)
+                _log("Prompt copied to clipboard (%s chars)" % len(text))
+                try:
+                    nuke.tprint(
+                        "[Pix-Edit] Prompt copied — paste into Edit Image… prompt field"
+                    )
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    nuke.message("Copy failed:\n%s\n\nSelect text manually." % e)
+                except Exception:
+                    pass
+
+        def _reset(self):
+            try:
+                ok = nuke.ask(
+                    "Replace all local prompts with built-in defaults?\n"
+                    "Unsaved edits will be lost unless you already clicked Save."
+                )
+            except Exception:
+                ok = True
+            if not ok:
+                return
+            self._items = _default_prompt_library()
+            self._reload_list(0)
+
+    parent = None
+    try:
+        app = QtWidgets.QApplication.instance()
+        if app:
+            for w in app.topLevelWidgets():
+                if w.objectName() == "Foundry::UI::DockMainWindow" or "Nuke" in (
+                    w.windowTitle() or ""
+                ):
+                    parent = w
+                    break
+    except Exception:
+        parent = None
+
+    dlg = PromptLibDialog(parent)
+    if hasattr(dlg, "exec_"):
+        dlg.exec_()
+    else:
+        dlg.exec()
+
+
+def _show_prompt_examples_nuke_panel():
+    """Fallback when PySide is unavailable."""
+    import nukescripts  # type: ignore
+
+    items = load_prompt_library()
+    titles = [it.get("title") or ("Prompt %s" % (i + 1)) for i, it in enumerate(items)]
+    if not titles:
+        items = _default_prompt_library()
+        titles = [it["title"] for it in items]
+
+    state = {"items": [dict(x) for x in items], "idx": 0}
+
+    class PromptLibPanel(nukescripts.PythonPanel):
+        def __init__(self):
+            nukescripts.PythonPanel.__init__(
+                self, "Pix-Edit Prompt Examples (local)"
+            )
+            self.pick = nuke.Enumeration_Knob("pick", "Prompt", titles)
+            self.title_k = nuke.String_Knob("title_k", "Title")
+            self.body = nuke.Multiline_Eval_String_Knob("body", "Prompt text")
+            self.help = nuke.Text_Knob(
+                "help",
+                "",
+                "Edit title/text. OK = Save local library.<br>"
+                "Then open Edit Image and paste the prompt.",
+            )
+            self.addKnob(self.pick)
+            self.addKnob(self.title_k)
+            self.addKnob(self.body)
+            self.addKnob(self.help)
+            self._load(0)
+
+        def _load(self, idx):
+            if idx < 0 or idx >= len(state["items"]):
+                return
+            state["idx"] = idx
+            it = state["items"][idx]
+            self.title_k.setValue(it.get("title") or "")
+            self.body.setValue(it.get("text") or "")
+
+        def knobChanged(self, knob):
+            if knob == self.pick:
+                i = state["idx"]
+                if 0 <= i < len(state["items"]):
+                    state["items"][i]["title"] = self.title_k.value()
+                    state["items"][i]["text"] = self.body.value()
+                self._load(int(self.pick.getValue()))
+            elif knob in (self.title_k, self.body):
+                i = state["idx"]
+                if 0 <= i < len(state["items"]):
+                    state["items"][i]["title"] = self.title_k.value()
+                    state["items"][i]["text"] = self.body.value()
+
+    p = PromptLibPanel()
+    if p.showModalDialog():
+        i = state["idx"]
+        if 0 <= i < len(state["items"]):
+            state["items"][i]["title"] = p.title_k.value()
+            state["items"][i]["text"] = p.body.value()
+        try:
+            path = save_prompt_library(state["items"])
+            nuke.message(
+                "Saved locally:\n%s\n\nCopy prompt text into Edit Image… manually."
+                % path
+            )
+        except Exception as e:
+            nuke.message("Save failed:\n%s" % e)
 
 
 def ping_server(server=None):
@@ -3153,19 +3752,22 @@ def register_menu():
         return
     _ensure_sys_module()
     menubar = nuke.menu("Nuke")
-    try:
-        menubar.removeItem("ComfyUI")
-    except Exception:
-        pass
-    m = menubar.addMenu("ComfyUI")
+    for old_name in ("ComfyUI", "Pix-Edit", MENU_NAME):
+        try:
+            menubar.removeItem(old_name)
+        except Exception:
+            pass
+    m = menubar.addMenu(MENU_NAME)
     m.addCommand("Edit Image...", show_panel)
     m.addCommand("Image Gen...", show_image_gen_panel)
     m.addCommand("Image to Video...", show_image_to_video_panel)
     m.addCommand("Ping Server", ping_server)
+    m.addCommand("Prompt Examples...", show_prompt_examples_panel)
+
     nuke.tprint(
-        "[ComfyEdit] Menu OK — Edit Image / Image Gen / Image to Video / Ping | "
-        "server=%s root=%s"
-        % (DEFAULT_SERVER, REPO_ROOT)
+        "[Pix-Edit] Menu OK — Edit Image / Prompt Examples / Gen / I2V / Ping | "
+        "server=%s root=%s workflow=%s"
+        % (DEFAULT_SERVER, REPO_ROOT, os.path.basename(DEFAULT_WORKFLOW))
     )
 
 

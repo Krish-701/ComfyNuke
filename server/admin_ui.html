@@ -1,0 +1,1110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pix-Edit Access Control</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --accent: #3d8bfd;
+      --ok: #3dd68c;
+      --bad: #f07178;
+      --border: #2a3548;
+      --row: #121a26;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+    }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 28px 18px 60px; }
+    h1 { font-size: 1.45rem; margin: 0 0 6px; }
+    h2 { font-size: 1.1rem; margin: 0 0 12px; }
+    .sub { color: var(--muted); margin-bottom: 22px; font-size: 0.95rem; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 18px 18px 16px; margin-bottom: 16px;
+    }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
+    input[type=text], input[type=password], select {
+      width: 100%; padding: 10px 12px; border-radius: 8px;
+      border: 1px solid var(--border); background: #0d121a; color: var(--text);
+      margin-bottom: 12px; font-size: 0.95rem;
+    }
+    button, .btn {
+      appearance: none; border: 0; border-radius: 8px; padding: 8px 12px;
+      background: var(--accent); color: #fff; font-weight: 600; cursor: pointer;
+      font-size: 0.85rem;
+    }
+    button.secondary { background: #2a3548; }
+    button.danger { background: #a33b45; }
+    button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+    .row > * { flex: 1 1 140px; }
+    .row.tight > * { flex: 0 1 auto; }
+    .status {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 10px; border-radius: 999px; font-size: 0.85rem;
+      background: #121a26; border: 1px solid var(--border);
+    }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+    .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+    .dot.off { background: var(--bad); }
+    .msg { margin: 10px 0; padding: 10px 12px; border-radius: 8px; font-size: 0.9rem; }
+    .msg.err { background: #3a1d22; color: #ffb4b8; }
+    .msg.ok { background: #163226; color: #b6f0d0; }
+    .hidden { display: none !important; }
+    code { background: #0d121a; padding: 2px 6px; border-radius: 4px; font-size: 0.85em; }
+    .hint { color: var(--muted); font-size: 0.85rem; line-height: 1.45; }
+    .switch { position: relative; width: 46px; height: 26px; display: inline-block; vertical-align: middle; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; cursor: pointer; inset: 0; background: #3a4458;
+      border-radius: 26px; transition: .2s;
+    }
+    .slider:before {
+      position: absolute; content: ""; height: 20px; width: 20px; left: 3px; bottom: 3px;
+      background: white; border-radius: 50%; transition: .2s;
+    }
+    input:checked + .slider { background: var(--ok); }
+    input:checked + .slider:before { transform: translateX(20px); }
+
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+    .toolbar select { width: auto; min-width: 140px; margin: 0; }
+    .search { flex: 1 1 180px; margin: 0 !important; }
+
+    .group {
+      border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px;
+      overflow: hidden; background: #141c28;
+    }
+    .group-head {
+      display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+      background: #182131; cursor: pointer; user-select: none;
+    }
+    .group-head:hover { background: #1c283a; }
+    .chevron {
+      width: 18px; text-align: center; color: var(--muted); font-weight: 700;
+      transition: transform .15s;
+    }
+    .group.open .chevron { transform: rotate(90deg); }
+    .group-title { font-weight: 600; flex: 1; }
+    .group-meta { color: var(--muted); font-size: 0.8rem; margin-right: 8px; }
+    .group-body { display: none; border-top: 1px solid var(--border); }
+    .group.open .group-body { display: block; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    th { color: var(--muted); font-weight: 600; font-size: 0.78rem; background: var(--row); }
+    tr:hover td { background: rgba(61,139,253,0.06); }
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 0.75rem; background: #243044; color: var(--muted);
+    }
+    .badge.on { background: #1a3d2e; color: var(--ok); }
+    .badge.off { background: #3a1d22; color: #ffb4b8; }
+
+    /* modal */
+    .modal-bg {
+      position: fixed; inset: 0; background: rgba(0,0,0,.55);
+      display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px;
+    }
+    .modal {
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+      width: min(480px, 100%); padding: 18px;
+    }
+    .modal h3 { margin: 0 0 12px; font-size: 1.05rem; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+    .tab {
+      background: #121a26; border: 1px solid var(--border); color: var(--muted);
+      padding: 10px 16px; border-radius: 999px; font-weight: 600; cursor: pointer;
+    }
+    .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .stat-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px; margin-bottom: 14px;
+    }
+    .stat {
+      background: var(--row); border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px;
+    }
+    .stat .n { font-size: 1.35rem; font-weight: 700; }
+    .stat .t { color: var(--muted); font-size: 0.8rem; margin-top: 4px; }
+    .log-table-wrap { overflow-x: auto; max-height: 480px; overflow-y: auto; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1 id="pageTitle">Pix-Edit · Studio Control</h1>
+    <p class="sub" id="pageSub">Port 8600 — Access control · usage logs · CSV reports</p>
+
+    <div id="loginCard" class="card">
+      <h2>Admin login</h2>
+      <div id="loginMsg"></div>
+      <label>Username</label>
+      <input id="user" type="text" autocomplete="username" value="Krish" />
+      <label>Password</label>
+      <input id="pass" type="password" autocomplete="current-password" />
+      <button id="btnLogin">Sign in</button>
+    </div>
+
+    <div id="dash" class="hidden">
+      <div class="card">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div>
+            <div class="status">
+              <span id="aclDot" class="dot off"></span>
+              <span id="aclLabel">ACL: …</span>
+            </div>
+            <div class="hint" style="margin-top:8px">
+              Your IP: <code id="myIp">?</code> ·
+              Proxy: <code id="proxyUrl">/comfyui</code><br>
+              Signed in: <code id="whoAmI">—</code>
+              <span class="badge" id="roleBadge" style="margin-left:6px">role</span>
+            </div>
+          </div>
+          <div class="row tight">
+            <button id="btnLogout" class="secondary">Logout</button>
+          </div>
+        </div>
+        <div id="dashMsg"></div>
+        <div class="tabs" style="margin-top:14px;margin-bottom:0">
+          <button type="button" class="tab active" data-tab="access">Access control</button>
+          <button type="button" class="tab" data-tab="logs">Usage logs</button>
+          <button type="button" class="tab hidden" data-tab="users" id="tabUsersBtn">Users &amp; roles</button>
+        </div>
+      </div>
+
+      <div id="tabAccess">
+      <div class="card">
+        <div class="row tight">
+          <button id="btnEnable">Enable access control</button>
+          <button id="btnDisable" class="secondary">Disable (open LAN)</button>
+        </div>
+        <p class="hint" style="margin-top:12px">
+          Master <b>ON</b> + machine toggle <b>ON</b> → can run jobs via <code>/comfyui</code>.<br>
+          Toggle <b>OFF</b> → blocked on the next request (live).
+        </p>
+      </div>
+
+      <div class="card">
+        <h2>Add machine</h2>
+        <div class="row">
+          <div>
+            <label>IP address</label>
+            <input id="newIp" type="text" placeholder="192.168.11.110" />
+          </div>
+          <div>
+            <label>Short name</label>
+            <input id="newLabel" type="text" placeholder="Nuke-Artist-03" />
+          </div>
+          <div>
+            <label>Group</label>
+            <input id="newGroup" type="text" list="groupList" placeholder="Floor-A / Suite-1" />
+            <datalist id="groupList"></datalist>
+          </div>
+          <div style="flex:0 0 auto;margin-bottom:12px">
+            <button id="btnAdd">Add</button>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>New empty group</label>
+            <input id="newGroupOnly" type="text" placeholder="Compositing" />
+          </div>
+          <div style="flex:0 0 auto;margin-bottom:12px">
+            <button id="btnAddGroup" class="secondary">Create group</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Machines</h2>
+        <div class="toolbar">
+          <input id="filter" class="search" type="text" placeholder="Filter name / IP / group…" />
+          <div>
+            <label style="margin:0">Sort</label>
+            <select id="sortBy">
+              <option value="group">Group</option>
+              <option value="name">Short name</option>
+              <option value="ip">IP</option>
+            </select>
+          </div>
+          <div>
+            <label style="margin:0">View</label>
+            <select id="viewMode">
+              <option value="grouped">Grouped (collapse)</option>
+              <option value="flat">Flat list</option>
+            </select>
+          </div>
+          <button id="btnExpand" class="ghost" type="button">Expand all</button>
+          <button id="btnCollapse" class="ghost" type="button">Collapse all</button>
+        </div>
+        <div id="machineList"></div>
+      </div>
+      </div><!-- /tabAccess -->
+
+      <div id="tabLogs" class="hidden">
+        <div class="card">
+          <h2>Usage summary (per machine / user)</h2>
+          <div class="stat-grid" id="logStats"></div>
+          <div class="toolbar">
+            <div>
+              <label>From</label>
+              <input id="logFrom" type="text" placeholder="2026-08-01" style="margin:0" />
+            </div>
+            <div>
+              <label>To</label>
+              <input id="logTo" type="text" placeholder="2026-08-31" style="margin:0" />
+            </div>
+            <div>
+              <label>Event</label>
+              <select id="logEvent" style="margin:0">
+                <option value="">All events</option>
+                <option value="job_queue">Job queued</option>
+                <option value="job_done">Job done</option>
+                <option value="job_error">Job error</option>
+                <option value="upload">Upload</option>
+                <option value="download">Download</option>
+                <option value="access_denied">Access denied</option>
+                <option value="bootstrap">Bootstrap</option>
+                <option value="api">Other API</option>
+              </select>
+            </div>
+            <div style="flex:1">
+              <label>Search</label>
+              <input id="logQ" class="search" type="text" placeholder="IP, name, prompt id, machine id…" style="margin:0" />
+            </div>
+            <button id="btnLogRefresh" type="button">Refresh</button>
+            <button id="btnCsvEvents" class="secondary" type="button">Export events CSV</button>
+            <button id="btnCsvSummary" class="secondary" type="button">Export summary CSV</button>
+          </div>
+          <div id="logMsg"></div>
+          <div class="log-table-wrap" style="margin-top:10px">
+            <table>
+              <thead>
+                <tr>
+                  <th>Machine ID</th>
+                  <th>Name</th>
+                  <th>Group</th>
+                  <th>IP</th>
+                  <th>Jobs queued</th>
+                  <th>Jobs done</th>
+                  <th>Errors</th>
+                  <th>Uploads</th>
+                  <th>Total runtime</th>
+                  <th>Avg runtime</th>
+                  <th>First seen</th>
+                  <th>Last seen</th>
+                </tr>
+              </thead>
+              <tbody id="summaryBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Event log (detail)</h2>
+          <p class="hint">Full activity with unique event ID, prompt ID, runtime when job completes.</p>
+          <div class="log-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Event ID</th>
+                  <th>Event</th>
+                  <th>Name</th>
+                  <th>Group</th>
+                  <th>IP</th>
+                  <th>Machine ID</th>
+                  <th>Path</th>
+                  <th>Status</th>
+                  <th>Runtime</th>
+                  <th>Prompt ID</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody id="logBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div><!-- /tabLogs -->
+
+      <div id="tabUsers" class="hidden">
+        <div class="card">
+          <h2>Users &amp; roles</h2>
+          <p class="hint">
+            <b>admin</b> — full control (users, ACL, machines, logs).<br>
+            <b>operator</b> — manage machines / enable ACL / logs (no user admin).<br>
+            <b>viewer</b> — read-only machines + logs + CSV export.
+          </p>
+          <div class="row">
+            <div>
+              <label>Username</label>
+              <input id="uName" type="text" placeholder="operator1" />
+            </div>
+            <div>
+              <label>Display name</label>
+              <input id="uDisplay" type="text" placeholder="Studio operator" />
+            </div>
+            <div>
+              <label>Role</label>
+              <select id="uRole">
+                <option value="viewer">viewer</option>
+                <option value="operator">operator</option>
+                <option value="admin">admin</option>
+              </select>
+            </div>
+            <div>
+              <label>Password (min 8)</label>
+              <input id="uPass" type="password" autocomplete="new-password" />
+            </div>
+            <div style="flex:0;margin-bottom:12px">
+              <button id="btnUserAdd" type="button">Add user</button>
+            </div>
+          </div>
+          <div id="userMsg"></div>
+          <div class="log-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Display</th>
+                  <th>Role</th>
+                  <th>Enabled</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="userBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div><!-- /tabUsers -->
+    </div>
+  </div>
+
+  <div id="editModal" class="modal-bg hidden">
+    <div class="modal">
+      <h3>Edit machine</h3>
+      <input type="hidden" id="editId" />
+      <input type="hidden" id="editOldIp" />
+      <label>IP address</label>
+      <input id="editIp" type="text" />
+      <label>Short name</label>
+      <input id="editLabel" type="text" />
+      <label>Group</label>
+      <input id="editGroup" type="text" list="groupList" />
+      <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <span>Enabled</span>
+        <label class="switch" style="margin:0">
+          <input id="editEnabled" type="checkbox" />
+          <span class="slider"></span>
+        </label>
+      </label>
+      <div class="modal-actions">
+        <button id="editCancel" class="secondary" type="button">Cancel</button>
+        <button id="editSave" type="button">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="renameGroupModal" class="modal-bg hidden">
+    <div class="modal">
+      <h3>Rename group</h3>
+      <input type="hidden" id="renameOld" />
+      <label>New group name</label>
+      <input id="renameNew" type="text" />
+      <div class="modal-actions">
+        <button id="renameCancel" class="secondary" type="button">Cancel</button>
+        <button id="renameSave" type="button">Rename</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let STATE = { ips: [], groups: [], ungrouped_name: "Ungrouped", user: null };
+    let collapsed = {}; // group -> true if collapsed
+    let PERMS = [];
+
+    function can(perm) {
+      if (!PERMS || !PERMS.length) return false;
+      if (PERMS.indexOf("*") >= 0) return true;
+      return PERMS.indexOf(perm) >= 0;
+    }
+
+    function showMsg(el, text, ok) {
+      if (!text) { el.innerHTML = ""; return; }
+      el.innerHTML = `<div class="msg ${ok ? "ok" : "err"}">${text}</div>`;
+    }
+
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+      }[c]));
+    }
+
+    async function api(path, opts = {}) {
+      const res = await fetch(path, {
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+        ...opts,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText || "request failed");
+      return data;
+    }
+
+    function ipKey(ip) {
+      // numeric sort helper for IPv4
+      const p = String(ip).split(".");
+      if (p.length === 4 && p.every((x) => /^\d+$/.test(x))) {
+        return p.map((x) => x.padStart(3, "0")).join(".");
+      }
+      return String(ip);
+    }
+
+    function sortedIps(ips) {
+      const sort = $("sortBy").value;
+      const arr = ips.slice();
+      arr.sort((a, b) => {
+        if (sort === "ip") {
+          return ipKey(a.ip).localeCompare(ipKey(b.ip));
+        }
+        if (sort === "name") {
+          const na = (a.label || a.ip || "").toLowerCase();
+          const nb = (b.label || b.ip || "").toLowerCase();
+          if (na !== nb) return na.localeCompare(nb);
+          return ipKey(a.ip).localeCompare(ipKey(b.ip));
+        }
+        // group then name
+        const ga = (a.group || STATE.ungrouped_name || "Ungrouped").toLowerCase();
+        const gb = (b.group || STATE.ungrouped_name || "Ungrouped").toLowerCase();
+        if (ga !== gb) return ga.localeCompare(gb);
+        const na = (a.label || a.ip || "").toLowerCase();
+        const nb = (b.label || b.ip || "").toLowerCase();
+        if (na !== nb) return na.localeCompare(nb);
+        return ipKey(a.ip).localeCompare(ipKey(b.ip));
+      });
+      return arr;
+    }
+
+    function filteredIps() {
+      const q = ($("filter").value || "").trim().toLowerCase();
+      let ips = STATE.ips || [];
+      if (q) {
+        ips = ips.filter((e) => {
+          const hay = [e.ip, e.label, e.group].map((x) => String(x || "").toLowerCase()).join(" ");
+          return hay.includes(q);
+        });
+      }
+      return sortedIps(ips);
+    }
+
+    function fillGroupDatalist() {
+      const dl = $("groupList");
+      const names = new Set(STATE.groups || []);
+      (STATE.ips || []).forEach((e) => { if (e.group) names.add(e.group); });
+      dl.innerHTML = Array.from(names).sort().map((g) => `<option value="${esc(g)}"></option>`).join("");
+    }
+
+    function rowHtml(e) {
+      const on = !!e.enabled;
+      return `<tr data-id="${esc(e.id)}" data-ip="${esc(e.ip)}">
+        <td><code>${esc(e.ip)}</code></td>
+        <td>${esc(e.label || "—")}</td>
+        <td><span class="badge">${esc(e.group || STATE.ungrouped_name)}</span></td>
+        <td>
+          ${can("machines.edit") ? `<label class="switch">
+            <input type="checkbox" class="tog-ip" data-ip="${esc(e.ip)}" ${on ? "checked" : ""} />
+            <span class="slider"></span>
+          </label>` : ""}
+          <span class="badge ${on ? "on" : "off"}">${on ? "ON" : "OFF"}</span>
+        </td>
+        <td class="actions">
+          ${can("machines.edit") ? `<button type="button" class="secondary btn-edit"
+            data-id="${esc(e.id)}" data-ip="${esc(e.ip)}"
+            data-label="${esc(e.label || "")}" data-group="${esc(e.group || "")}"
+            data-enabled="${on ? "1" : "0"}">Edit</button>
+          <button type="button" class="danger btn-rm" data-ip="${esc(e.ip)}" data-id="${esc(e.id)}">Remove</button>` : `<span class="hint">read-only</span>`}
+        </td>
+      </tr>`;
+    }
+
+    function tableHead() {
+      return `<table>
+        <thead><tr>
+          <th>IP</th><th>Short name</th><th>Group</th><th>Enabled</th><th>Actions</th>
+        </tr></thead><tbody>`;
+    }
+
+    function bindRowActions(root) {
+      root.querySelectorAll(".tog-ip").forEach((cb) => {
+        cb.addEventListener("change", async () => {
+          try {
+            await api("/admin/api/set_ip_enabled", {
+              method: "POST",
+              body: JSON.stringify({ ip: cb.dataset.ip, enabled: cb.checked }),
+            });
+            showMsg($("dashMsg"), `${cb.dataset.ip} ${cb.checked ? "enabled" : "disabled"}`, true);
+            await refresh(false);
+          } catch (err) {
+            showMsg($("dashMsg"), err.message, false);
+            await refresh(false);
+          }
+        });
+      });
+      root.querySelectorAll(".btn-rm").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          if (!confirm("Remove " + btn.dataset.ip + "?")) return;
+          try {
+            await api("/admin/api/remove_ip", {
+              method: "POST",
+              body: JSON.stringify({ ip: btn.dataset.ip, id: btn.dataset.id }),
+            });
+            showMsg($("dashMsg"), "Removed " + btn.dataset.ip, true);
+            await refresh(false);
+          } catch (err) {
+            showMsg($("dashMsg"), err.message, false);
+          }
+        });
+      });
+      root.querySelectorAll(".btn-edit").forEach((btn) => {
+        btn.addEventListener("click", () => openEdit(btn.dataset));
+      });
+    }
+
+    function renderMachines() {
+      const list = $("machineList");
+      const ips = filteredIps();
+      fillGroupDatalist();
+      const mode = $("viewMode").value;
+
+      if (!ips.length) {
+        list.innerHTML = `<p class="hint">No machines match. Add an IP above.</p>`;
+        return;
+      }
+
+      if (mode === "flat") {
+        list.innerHTML = tableHead() + ips.map(rowHtml).join("") + "</tbody></table>";
+        bindRowActions(list);
+        return;
+      }
+
+      // group mode
+      const un = STATE.ungrouped_name || "Ungrouped";
+      const order = [];
+      const map = {};
+      // preferred group order from STATE.groups then any others
+      (STATE.groups || []).forEach((g) => {
+        if (!map[g]) { map[g] = []; order.push(g); }
+      });
+      ips.forEach((e) => {
+        const g = e.group || un;
+        if (!map[g]) { map[g] = []; order.push(g); }
+        map[g].push(e);
+      });
+      // include empty named groups
+      (STATE.groups || []).forEach((g) => {
+        if (!map[g]) { map[g] = []; if (!order.includes(g)) order.push(g); }
+      });
+      if (map[un] && !order.includes(un)) order.push(un);
+
+      // if sort is group, keep order alphabetically for unknown
+      if ($("sortBy").value === "group") {
+        order.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+      }
+
+      let html = "";
+      order.forEach((g) => {
+        const members = map[g] || [];
+        if (!members.length && g === un) return; // skip empty ungrouped
+        const isOpen = collapsed[g] === true ? false : true; // default open
+        const onCount = members.filter((m) => m.enabled).length;
+        html += `<div class="group ${isOpen ? "open" : ""}" data-group="${esc(g)}">
+          <div class="group-head" data-toggle="${esc(g)}">
+            <span class="chevron">▶</span>
+            <span class="group-title">${esc(g)}</span>
+            <span class="group-meta">${members.length} machine(s) · ${onCount} on</span>
+            ${can("machines.edit") ? `<button type="button" class="ghost btn-grp-on" data-group="${esc(g)}" title="Enable all">All ON</button>
+            <button type="button" class="ghost btn-grp-off" data-group="${esc(g)}" title="Disable all">All OFF</button>
+            <button type="button" class="secondary btn-grp-rename" data-group="${esc(g)}">Rename</button>` : ""}
+            ${can("machines.edit") && g !== un ? `<button type="button" class="danger btn-grp-del" data-group="${esc(g)}">Delete group</button>` : ""}
+          </div>
+          <div class="group-body">
+            ${members.length ? tableHead() + members.map(rowHtml).join("") + "</tbody></table>"
+              : `<p class="hint" style="padding:12px">Empty group — add machines with this group name.</p>`}
+          </div>
+        </div>`;
+      });
+      list.innerHTML = html;
+
+      list.querySelectorAll(".group-head").forEach((head) => {
+        head.addEventListener("click", (ev) => {
+          if (ev.target.closest("button")) return;
+          const g = head.dataset.toggle;
+          const box = head.parentElement;
+          const open = box.classList.toggle("open");
+          collapsed[g] = !open;
+        });
+      });
+      list.querySelectorAll(".btn-grp-on").forEach((btn) => {
+        btn.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          await api("/admin/api/set_group_enabled", {
+            method: "POST",
+            body: JSON.stringify({ group: btn.dataset.group, enabled: true }),
+          });
+          showMsg($("dashMsg"), "Group enabled: " + btn.dataset.group, true);
+          await refresh(false);
+        });
+      });
+      list.querySelectorAll(".btn-grp-off").forEach((btn) => {
+        btn.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          await api("/admin/api/set_group_enabled", {
+            method: "POST",
+            body: JSON.stringify({ group: btn.dataset.group, enabled: false }),
+          });
+          showMsg($("dashMsg"), "Group disabled: " + btn.dataset.group, true);
+          await refresh(false);
+        });
+      });
+      list.querySelectorAll(".btn-grp-rename").forEach((btn) => {
+        btn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          openRenameGroup(btn.dataset.group);
+        });
+      });
+      list.querySelectorAll(".btn-grp-del").forEach((btn) => {
+        btn.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          if (!confirm("Delete group \"" + btn.dataset.group + "\"? Machines move to Ungrouped.")) return;
+          try {
+            await api("/admin/api/remove_group", {
+              method: "POST",
+              body: JSON.stringify({ group: btn.dataset.group, reassign_to: "Ungrouped" }),
+            });
+            await refresh(false);
+          } catch (err) {
+            showMsg($("dashMsg"), err.message, false);
+          }
+        });
+      });
+      bindRowActions(list);
+    }
+
+    function openEdit(ds) {
+      $("editId").value = ds.id || "";
+      $("editOldIp").value = ds.ip || "";
+      $("editIp").value = ds.ip || "";
+      $("editLabel").value = ds.label || "";
+      $("editGroup").value = ds.group || "";
+      $("editEnabled").checked = ds.enabled === "1";
+      $("editModal").classList.remove("hidden");
+    }
+    function closeEdit() { $("editModal").classList.add("hidden"); }
+
+    function openRenameGroup(g) {
+      $("renameOld").value = g;
+      $("renameNew").value = g;
+      $("renameGroupModal").classList.remove("hidden");
+    }
+    function closeRename() { $("renameGroupModal").classList.add("hidden"); }
+
+    function renderState(st) {
+      STATE = st;
+      PERMS = (st.user && st.user.permissions) || [];
+      $("myIp").textContent = st.client_ip || "?";
+      $("proxyUrl").textContent = st.comfy_proxy || "/comfyui";
+      const on = !!st.enabled;
+      $("aclDot").className = "dot " + (on ? "on" : "off");
+      $("aclLabel").textContent = on
+        ? "Access control ON — only enabled IPs"
+        : "Access control OFF — open LAN";
+      const u = st.user || {};
+      $("whoAmI").textContent = (u.display_name || u.username || "—") + " (" + (u.role || "?") + ")";
+      $("roleBadge").textContent = u.role || "role";
+      $("tabUsersBtn").classList.toggle("hidden", !can("users.manage"));
+      // hide write controls for viewers
+      const write = can("machines.edit");
+      const aclToggle = can("acl.toggle");
+      $("btnEnable").style.display = aclToggle ? "" : "none";
+      $("btnDisable").style.display = aclToggle ? "" : "none";
+      $("btnAdd").style.display = write ? "" : "none";
+      $("btnAddGroup").style.display = write ? "" : "none";
+      renderMachines();
+      if (can("users.manage") && !$("tabUsers").classList.contains("hidden")) {
+        loadUsers();
+      }
+    }
+
+    async function refresh(showLoginErr) {
+      const st = await api("/admin/api/state");
+      if (!st.authenticated) {
+        $("loginCard").classList.remove("hidden");
+        $("dash").classList.add("hidden");
+        return;
+      }
+      $("loginCard").classList.add("hidden");
+      $("dash").classList.remove("hidden");
+      renderState(st);
+    }
+
+    $("btnLogin").onclick = async () => {
+      try {
+        await api("/admin/api/login", {
+          method: "POST",
+          body: JSON.stringify({ username: $("user").value, password: $("pass").value }),
+        });
+        showMsg($("loginMsg"), "", true);
+        await refresh();
+      } catch (err) {
+        showMsg($("loginMsg"), err.message || "login failed", false);
+      }
+    };
+    $("pass").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btnLogin").click(); });
+    $("btnLogout").onclick = async () => {
+      await api("/admin/api/logout", { method: "POST", body: "{}" });
+      await refresh();
+    };
+    $("btnEnable").onclick = async () => {
+      await api("/admin/api/set_enabled", { method: "POST", body: JSON.stringify({ enabled: true }) });
+      showMsg($("dashMsg"), "Access control ENABLED", true);
+      refresh();
+    };
+    $("btnDisable").onclick = async () => {
+      await api("/admin/api/set_enabled", { method: "POST", body: JSON.stringify({ enabled: false }) });
+      showMsg($("dashMsg"), "Access control DISABLED — open LAN", true);
+      refresh();
+    };
+    $("btnAdd").onclick = async () => {
+      try {
+        await api("/admin/api/upsert_ip", {
+          method: "POST",
+          body: JSON.stringify({
+            ip: $("newIp").value.trim(),
+            label: $("newLabel").value.trim(),
+            group: $("newGroup").value.trim(),
+            enabled: true,
+          }),
+        });
+        $("newIp").value = "";
+        $("newLabel").value = "";
+        showMsg($("dashMsg"), "Machine added", true);
+        await refresh(false);
+      } catch (err) {
+        showMsg($("dashMsg"), err.message, false);
+      }
+    };
+    $("btnAddGroup").onclick = async () => {
+      try {
+        const name = $("newGroupOnly").value.trim();
+        await api("/admin/api/add_group", { method: "POST", body: JSON.stringify({ name }) });
+        $("newGroupOnly").value = "";
+        showMsg($("dashMsg"), "Group created: " + name, true);
+        await refresh(false);
+      } catch (err) {
+        showMsg($("dashMsg"), err.message, false);
+      }
+    };
+
+    $("filter").addEventListener("input", () => renderMachines());
+    $("sortBy").addEventListener("change", () => renderMachines());
+    $("viewMode").addEventListener("change", () => renderMachines());
+    $("btnExpand").onclick = () => {
+      Object.keys(collapsed).forEach((k) => { collapsed[k] = false; });
+      // open all currently shown
+      document.querySelectorAll(".group").forEach((g) => {
+        g.classList.add("open");
+        collapsed[g.dataset.group] = false;
+      });
+    };
+    $("btnCollapse").onclick = () => {
+      document.querySelectorAll(".group").forEach((g) => {
+        g.classList.remove("open");
+        collapsed[g.dataset.group] = true;
+      });
+    };
+
+    $("editCancel").onclick = closeEdit;
+    $("editModal").addEventListener("click", (e) => { if (e.target === $("editModal")) closeEdit(); });
+    $("editSave").onclick = async () => {
+      try {
+        await api("/admin/api/update_entry", {
+          method: "POST",
+          body: JSON.stringify({
+            id: $("editId").value || undefined,
+            ip: $("editOldIp").value,
+            new_ip: $("editIp").value.trim(),
+            label: $("editLabel").value.trim(),
+            group: $("editGroup").value.trim(),
+            enabled: $("editEnabled").checked,
+          }),
+        });
+        closeEdit();
+        showMsg($("dashMsg"), "Machine updated", true);
+        await refresh(false);
+      } catch (err) {
+        showMsg($("dashMsg"), err.message, false);
+      }
+    };
+
+    $("renameCancel").onclick = closeRename;
+    $("renameGroupModal").addEventListener("click", (e) => {
+      if (e.target === $("renameGroupModal")) closeRename();
+    });
+    $("renameSave").onclick = async () => {
+      try {
+        await api("/admin/api/rename_group", {
+          method: "POST",
+          body: JSON.stringify({
+            old_name: $("renameOld").value,
+            new_name: $("renameNew").value.trim(),
+          }),
+        });
+        closeRename();
+        showMsg($("dashMsg"), "Group renamed", true);
+        await refresh(false);
+      } catch (err) {
+        showMsg($("dashMsg"), err.message, false);
+      }
+    };
+
+    // ---- tabs ----
+    document.querySelectorAll(".tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+        tab.classList.add("active");
+        const name = tab.dataset.tab;
+        $("tabAccess").classList.toggle("hidden", name !== "access");
+        $("tabLogs").classList.toggle("hidden", name !== "logs");
+        $("tabUsers").classList.toggle("hidden", name !== "users");
+        if (name === "logs") loadLogs();
+        if (name === "users") loadUsers();
+      });
+    });
+
+    async function loadUsers() {
+      if (!can("users.manage")) return;
+      try {
+        const data = await api("/admin/api/users");
+        const body = $("userBody");
+        body.innerHTML = (data.users || []).map((u) => `<tr>
+          <td class="mono">${esc(u.username)}</td>
+          <td>${esc(u.display_name || "")}</td>
+          <td><span class="badge">${esc(u.role)}</span></td>
+          <td>
+            <label class="switch">
+              <input type="checkbox" class="tog-user" data-id="${esc(u.id)}" data-user="${esc(u.username)}" ${u.enabled ? "checked" : ""} />
+              <span class="slider"></span>
+            </label>
+          </td>
+          <td class="actions">
+            <button type="button" class="secondary btn-role" data-id="${esc(u.id)}" data-user="${esc(u.username)}" data-role="${esc(u.role)}">Change role</button>
+            <button type="button" class="secondary btn-resetpw" data-id="${esc(u.id)}" data-user="${esc(u.username)}">Reset password</button>
+            <button type="button" class="danger btn-deluser" data-id="${esc(u.id)}" data-user="${esc(u.username)}">Delete</button>
+          </td>
+        </tr>`).join("") || `<tr><td colspan="5">No users</td></tr>`;
+        body.querySelectorAll(".tog-user").forEach((cb) => {
+          cb.addEventListener("change", async () => {
+            try {
+              await api("/admin/api/users/update", {
+                method: "POST",
+                body: JSON.stringify({ id: cb.dataset.id, username: cb.dataset.user, enabled: cb.checked }),
+              });
+              showMsg($("userMsg"), "Updated " + cb.dataset.user, true);
+            } catch (e) {
+              showMsg($("userMsg"), e.message, false);
+              loadUsers();
+            }
+          });
+        });
+        body.querySelectorAll(".btn-role").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const role = prompt("Role: admin | operator | viewer", btn.dataset.role || "viewer");
+            if (!role) return;
+            try {
+              await api("/admin/api/users/update", {
+                method: "POST",
+                body: JSON.stringify({ id: btn.dataset.id, username: btn.dataset.user, role }),
+              });
+              showMsg($("userMsg"), "Role updated", true);
+              loadUsers();
+            } catch (e) {
+              showMsg($("userMsg"), e.message, false);
+            }
+          });
+        });
+        body.querySelectorAll(".btn-resetpw").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const pw = prompt("New password for " + btn.dataset.user + " (min 8 chars)");
+            if (!pw) return;
+            try {
+              await api("/admin/api/users/update", {
+                method: "POST",
+                body: JSON.stringify({ id: btn.dataset.id, username: btn.dataset.user, new_password: pw }),
+              });
+              showMsg($("userMsg"), "Password reset", true);
+            } catch (e) {
+              showMsg($("userMsg"), e.message, false);
+            }
+          });
+        });
+        body.querySelectorAll(".btn-deluser").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            if (!confirm("Delete user " + btn.dataset.user + "?")) return;
+            try {
+              await api("/admin/api/users/delete", {
+                method: "POST",
+                body: JSON.stringify({ id: btn.dataset.id, username: btn.dataset.user }),
+              });
+              showMsg($("userMsg"), "Deleted", true);
+              loadUsers();
+            } catch (e) {
+              showMsg($("userMsg"), e.message, false);
+            }
+          });
+        });
+      } catch (e) {
+        showMsg($("userMsg"), e.message, false);
+      }
+    }
+
+    $("btnUserAdd").onclick = async () => {
+      try {
+        await api("/admin/api/users/create", {
+          method: "POST",
+          body: JSON.stringify({
+            username: $("uName").value.trim(),
+            display_name: $("uDisplay").value.trim(),
+            role: $("uRole").value,
+            password: $("uPass").value,
+            enabled: true,
+          }),
+        });
+        $("uName").value = "";
+        $("uDisplay").value = "";
+        $("uPass").value = "";
+        showMsg($("userMsg"), "User created", true);
+        loadUsers();
+      } catch (e) {
+        showMsg($("userMsg"), e.message, false);
+      }
+    };
+
+    function fmtSec(s) {
+      s = Number(s) || 0;
+      if (s < 60) return s.toFixed(1) + "s";
+      const m = Math.floor(s / 60);
+      const r = Math.round(s % 60);
+      if (m < 60) return m + "m " + r + "s";
+      const h = Math.floor(m / 60);
+      return h + "h " + (m % 60) + "m";
+    }
+
+    function logQuery() {
+      const p = new URLSearchParams();
+      const from = ($("logFrom").value || "").trim();
+      const to = ($("logTo").value || "").trim();
+      const ev = $("logEvent").value;
+      const q = ($("logQ").value || "").trim();
+      if (from) p.set("from", from);
+      if (to) p.set("to", to);
+      if (ev) p.set("event", ev);
+      if (q) p.set("q", q);
+      p.set("limit", "1000");
+      return p.toString();
+    }
+
+    async function loadLogs() {
+      try {
+        const qs = logQuery();
+        const [summ, logs] = await Promise.all([
+          api("/admin/api/logs/summary?" + qs.replace(/limit=\d+/, "limit=50000")),
+          api("/admin/api/logs?" + qs),
+        ]);
+        const t = summ.totals || {};
+        $("logStats").innerHTML = [
+          ["Events", t.events || 0],
+          ["Jobs queued", t.jobs_queued || 0],
+          ["Jobs done", t.jobs_done || 0],
+          ["Errors", t.jobs_error || 0],
+          ["Uploads", t.uploads || 0],
+          ["Denied", t.access_denied || 0],
+          ["Total runtime", fmtSec(t.total_runtime_sec || 0)],
+          ["Users / machines", summ.count_users || 0],
+        ].map(([title, n]) => `<div class="stat"><div class="n">${esc(n)}</div><div class="t">${esc(title)}</div></div>`).join("");
+
+        const sb = $("summaryBody");
+        sb.innerHTML = (summ.users || []).map((u) => `<tr>
+          <td class="mono">${esc(u.machine_id || "—")}</td>
+          <td>${esc(u.label || "—")}</td>
+          <td>${esc(u.group || "—")}</td>
+          <td class="mono">${esc(u.ip || "")}</td>
+          <td>${esc(u.jobs_queued || 0)}</td>
+          <td>${esc(u.jobs_done || 0)}</td>
+          <td>${esc(u.jobs_error || 0)}</td>
+          <td>${esc(u.uploads || 0)}</td>
+          <td>${esc(fmtSec(u.total_runtime_sec))}</td>
+          <td>${esc(fmtSec(u.avg_runtime_sec))}</td>
+          <td class="mono">${esc((u.first_iso || "").replace("T", " "))}</td>
+          <td class="mono">${esc((u.last_iso || "").replace("T", " "))}</td>
+        </tr>`).join("") || `<tr><td colspan="12" class="hint">No usage yet — run a Nuke job through :8600/comfyui</td></tr>`;
+
+        const lb = $("logBody");
+        lb.innerHTML = (logs.logs || []).map((r) => `<tr>
+          <td class="mono">${esc((r.ts_iso || "").replace("T", " "))}</td>
+          <td class="mono">${esc(r.id || "")}</td>
+          <td><span class="badge">${esc(r.event || "")}</span></td>
+          <td>${esc(r.label || "—")}</td>
+          <td>${esc(r.group || "—")}</td>
+          <td class="mono">${esc(r.ip || "")}</td>
+          <td class="mono">${esc(r.machine_id || "—")}</td>
+          <td class="mono">${esc((r.method || "") + " " + (r.path || ""))}</td>
+          <td>${esc(r.status ?? "")}</td>
+          <td>${r.runtime_sec != null ? esc(fmtSec(r.runtime_sec)) : (r.duration_ms != null ? esc(r.duration_ms + "ms") : "—")}</td>
+          <td class="mono">${esc(r.prompt_id || "—")}</td>
+          <td>${esc(r.detail || "")}</td>
+        </tr>`).join("") || `<tr><td colspan="12" class="hint">No events in range</td></tr>`;
+        showMsg($("logMsg"), `Loaded ${logs.count || 0} events · ${summ.count_users || 0} machines`, true);
+      } catch (err) {
+        showMsg($("logMsg"), err.message, false);
+      }
+    }
+
+    $("btnLogRefresh").onclick = () => loadLogs();
+    $("btnCsvEvents").onclick = () => {
+      window.location.href = "/admin/api/logs/export.csv?" + logQuery();
+    };
+    $("btnCsvSummary").onclick = () => {
+      window.location.href = "/admin/api/logs/export_summary.csv?" + logQuery();
+    };
+
+    // Portal label from URL (/admin vs /operator)
+    (function portalLabel() {
+      const p = (location.pathname || "").toLowerCase();
+      if (p.indexOf("/operator") === 0) {
+        if ($("pageTitle")) $("pageTitle").textContent = "Pix-Edit · Operator portal";
+        if ($("pageSub")) {
+          $("pageSub").textContent =
+            "Sign in as operator — manage machine IPs, groups, and usage logs";
+        }
+        document.title = "Pix-Edit Operator";
+      } else if (p.indexOf("/login") === 0) {
+        if ($("pageTitle")) $("pageTitle").textContent = "Pix-Edit · Sign in";
+      }
+    })();
+
+    refresh().catch((e) => showMsg($("loginMsg"), e.message, false));
+  </script>
+</body>
+</html>

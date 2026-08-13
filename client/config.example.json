@@ -1,6 +1,6 @@
 {
   "server": "http://192.168.91.13:8188",
-  "workflow": "Edit_Image_v06.json",
+  "workflow": "Edit_Image_v08.json",
   "timeout_sec": 600,
   "poll_interval_sec": 2.0,
   "output_dir": "out"

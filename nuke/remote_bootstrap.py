@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-ComfyNuke remote bootstrap — served from Ubuntu :6000, run inside Nuke.
+ComfyNuke remote bootstrap — served from Ubuntu :8600, run inside Nuke.
 
 Artists do NOT need share/SSH access. They only need:
-  - HTTP :6000  (this script + code)
-  - HTTP :8188  (ComfyUI API)
+  - HTTP :8600  (this script + code + /comfyui proxy — IP gated)
+  - ComfyUI jobs use http://SERVER:8600/comfyui (not raw :8188)
 
 ONE LINE in Nuke Script Editor:
 
-  exec(__import__('urllib.request').request.urlopen('http://192.168.91.13:6000/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
+  exec(__import__('urllib.request').request.urlopen('http://192.168.91.13:8600/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
 
 On every launch this script:
   1) Asks the code server for /manifest.json (latest package version)
   2) Compares with the artist's local cache (~/.comfynuke/cache)
   3) If the local copy is missing or older, replaces code + workflows
      with whatever the server currently has
-  4) Registers the ComfyUI menu (Edit Image / Image Gen / Image to Video)
+  4) Registers the Pix-Edit menu (Edit Image / Image Gen / Image to Video)
 """
 
 from __future__ import print_function
@@ -34,12 +34,18 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Defaults (override by editing on server, or set env before exec)
 # ---------------------------------------------------------------------------
-CODE_BASE = (os.environ.get("COMFYNUKE_CODE_BASE") or "http://192.168.91.13:6000").rstrip(
+CODE_BASE = (os.environ.get("COMFYNUKE_CODE_BASE") or "http://192.168.91.13:8600").rstrip(
     "/"
 )
-COMFY_SERVER = (
-    os.environ.get("COMFYNUKE_SERVER") or "http://192.168.91.13:8188"
-).rstrip("/")
+# ComfyUI jobs MUST go through the :8600 /comfyui proxy so Access Control
+# enable/disable applies on every upload/queue (not direct :8188).
+_DEFAULT_COMFY_PROXY = CODE_BASE + "/comfyui"
+COMFY_SERVER = (os.environ.get("COMFYNUKE_SERVER") or _DEFAULT_COMFY_PROXY).rstrip("/")
+# If someone still points at raw :8188, rewrite to the gated proxy on same host.
+if COMFY_SERVER.rstrip("/").endswith(":8188") or COMFY_SERVER.rstrip("/").endswith(
+    ":8188/"
+):
+    COMFY_SERVER = _DEFAULT_COMFY_PROXY
 
 # Files to mirror from code server → local cache (paths relative to repo root).
 # Keep in lockstep with server/serve_code.py SYNC_FILES.
@@ -47,7 +53,7 @@ _SYNC_FILES = (
     "nuke/ComfyEdit.py",
     "nuke/launch.py",
     "client/comfy_client.py",
-    "Edit_Image_v06.json",
+    "Edit_Image_v08.json",
     "Image_generation_v01.json",
     "video_minimax_h3_i2v.json",
     "studio_config.json",  # optional
@@ -61,7 +67,7 @@ _ALWAYS_REFRESH = frozenset(
     [
         "nuke/ComfyEdit.py",
         "client/comfy_client.py",
-        "Edit_Image_v06.json",
+        "Edit_Image_v08.json",
         "Image_generation_v01.json",
         "video_minimax_h3_i2v.json",
     ]
@@ -286,7 +292,11 @@ def _ensure_studio_config(cache, comfy_server, code_base):
             cfg = {}
     else:
         cfg = {}
-    cfg["server"] = comfy_server
+    # Always pin to gated proxy (ACL live). Never leave artists on raw :8188.
+    srv = (comfy_server or "").rstrip("/")
+    if not srv or srv.endswith(":8188") or "/comfyui" not in srv:
+        srv = code_base.rstrip("/") + "/comfyui"
+    cfg["server"] = srv
     cfg["code_base_url"] = code_base
     cfg["studio_name"] = cfg.get("studio_name") or "ComfyNuke Studio"
     # empty output_dir → ComfyEdit uses ~/ComfyNuke_out/<host>
@@ -312,7 +322,7 @@ def bootstrap():
         _log("code server: %s" % health.decode("utf-8", "replace").strip().split("\n")[0])
     except Exception as e:
         raise RuntimeError(
-            "Cannot reach code server at %s (port 6000).\n"
+            "Cannot reach code server at %s (port 8600).\n"
             "Is serve_code.py running on Ubuntu?\n%s" % (CODE_BASE, e)
         )
 
@@ -396,7 +406,7 @@ def bootstrap():
     _log("    edit:  %s" % getattr(ComfyEdit, "DEFAULT_WORKFLOW", ""))
     _log("    gen:   %s" % getattr(ComfyEdit, "IMAGE_GEN_WORKFLOW", ""))
     _log("    i2v:   %s" % getattr(ComfyEdit, "I2V_WORKFLOW", ""))
-    _log("  Menu: Nuke > ComfyUI")
+    _log("  Menu: Nuke > Pix-Edit")
     _log("    Edit Image | Image Gen | Image to Video | Ping")
     _log("  Jobs share one ComfyUI queue on the Ubuntu GPU.")
     _log("=" * 56)

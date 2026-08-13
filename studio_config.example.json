@@ -1,7 +1,7 @@
 {
   "studio_name": "ComfyNuke Studio",
-  "server": "http://192.168.91.13:8188",
-  "code_base_url": "http://192.168.91.13:6000",
+  "server": "http://192.168.91.13:8600/comfyui",
+  "code_base_url": "http://192.168.91.13:8600",
   "output_dir": "",
-  "notes": "Copy to studio_config.json on the Ubuntu repo. server=ComfyUI API, code_base_url=read-only script server. Artists do not need filesystem access — only ports 8188 and 6000."
+  "notes": "ALWAYS use /comfyui proxy so Access Control IP on/off is live. Direct :8188 should be localhost-only. Admin: http://192.168.91.13:8600/admin"
 }

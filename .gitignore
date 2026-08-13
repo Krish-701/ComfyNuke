@@ -35,3 +35,7 @@ client/config.json
 *.local.json
 studio_config.json
 .comfynuke/
+server/access_control.json
+server/access_control.json.tmp
+server/usage_logs.jsonl
+server/usage_logs.jsonl.tmp

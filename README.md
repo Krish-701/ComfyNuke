@@ -5,17 +5,17 @@ Nuke artists talk to a **secure Ubuntu hub**:
 | Port | Role |
 |------|------|
 | **8188** | ComfyUI (generate / edit / i2v) |
-| **6000** | Read-only **code** server (scripts + workflows) |
+| **8600** | Read-only **code** server (scripts + workflows) |
 
 No Samba/SSH needed for artists — only those two HTTP ports.
 
 ## Artist — single paste (Nuke Script Editor)
 
 ```python
-exec(__import__('urllib.request').request.urlopen('http://192.168.91.13:6000/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
+exec(__import__('urllib.request').request.urlopen('http://192.168.91.13:8600/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
 ```
 
-Menu: **Nuke → ComfyUI** → Edit Image | Image Gen | Image to Video | Ping Server
+Menu: **Nuke → Pix-Edit** → Edit Image | Image Gen | Image to Video | Ping Server
 
 ## Ubuntu hub
 
@@ -30,11 +30,11 @@ cp -n studio_config.example.json studio_config.json
 
 # Terminal 1 — ComfyUI (your usual command), port 8188
 # Terminal 2 — code distribution:
-python3 server/serve_code.py --root /home/radhakrishnan/Comfyui-Setup/ComfyNuke --host 0.0.0.0 --port 6000
+python3 server/serve_code.py --root /home/radhakrishnan/Comfyui-Setup/ComfyNuke --host 0.0.0.0 --port 8600
 # or: ./server/start_code_server.sh
 ```
 
-Firewall: allow LAN **8188** + **6000**.
+Firewall: allow LAN **8188** + **8600**.
 
 Full guide: [docs/MULTI_USER_UBUNTU.md](docs/MULTI_USER_UBUNTU.md)
 
@@ -42,7 +42,7 @@ Full guide: [docs/MULTI_USER_UBUNTU.md](docs/MULTI_USER_UBUNTU.md)
 
 | Menu | Workflow file |
 |------|----------------|
-| Edit Image | `Edit_Image_v06.json` |
+| Edit Image | `Edit_Image_v08.json` (plate `80`, mask `123`, prompt `109.value`) |
 | Image Gen | `Image_generation_v01.json` |
 | Image to Video | `video_minimax_h3_i2v.json` |
 
@@ -50,7 +50,7 @@ Full guide: [docs/MULTI_USER_UBUNTU.md](docs/MULTI_USER_UBUNTU.md)
 
 | Path | Role |
 |------|------|
-| `server/serve_code.py` | HTTP :6000 code server |
+| `server/serve_code.py` | HTTP :8600 code server |
 | `server/start_code_server.sh` | Ubuntu start helper |
 | `nuke/remote_bootstrap.py` | Downloaded + run by artists |
 | `nuke/artist_one_liner.txt` | Copy-paste for Nuke |

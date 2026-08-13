@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Start ComfyNuke read-only code server on port 6000 (Ubuntu hub).
+# Start ComfyNuke read-only code server on port 8600 (Ubuntu hub).
 # ComfyUI itself should already run on :8188 separately.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${COMFYNUKE_CODE_HOST:-0.0.0.0}"
-PORT="${COMFYNUKE_CODE_PORT:-6000}"
+PORT="${COMFYNUKE_CODE_PORT:-8600}"
 
 cd "$ROOT"
 echo "ComfyNuke root: $ROOT"
