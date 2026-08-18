@@ -127,8 +127,38 @@ def _normalize_group(group: Optional[str]) -> str:
     return g if g else UNGROUPED
 
 
+def _normalize_workflow_name(name: str) -> str:
+    n = str(name or "").strip().replace("\\", "/")
+    if "/" in n:
+        n = n.rsplit("/", 1)[-1]
+    return n
+
+
+def _normalize_workflows(raw: Any) -> Optional[List[str]]:
+    """None = all workflows. List = only those .json names."""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        if raw.strip().lower() in ("", "*", "all"):
+            return None
+        raw = [raw]
+    if not isinstance(raw, list):
+        return None
+    out: List[str] = []
+    seen = set()
+    for item in raw:
+        n = _normalize_workflow_name(str(item or ""))
+        if not n or n in seen:
+            continue
+        if not n.endswith(".json"):
+            continue
+        seen.add(n)
+        out.append(n)
+    return out
+
+
 def _normalize_entry(e: Dict[str, Any]) -> Dict[str, Any]:
-    """Ensure entry has id, label, group, enabled, ip."""
+    """Ensure entry has id, label, group, enabled, ip, allowed_workflows."""
     out = dict(e) if isinstance(e, dict) else {}
     if not out.get("id"):
         out["id"] = _new_id()
@@ -139,6 +169,10 @@ def _normalize_entry(e: Dict[str, Any]) -> Dict[str, Any]:
     out["label"] = str(out.get("label") or "").strip()
     out["group"] = _normalize_group(str(out.get("group") or ""))
     out["enabled"] = bool(out.get("enabled", True))
+    if "allowed_workflows" in out:
+        out["allowed_workflows"] = _normalize_workflows(out.get("allowed_workflows"))
+    else:
+        out["allowed_workflows"] = None  # all
     return out
 
 
@@ -348,6 +382,10 @@ class AccessControl:
                 g = e.get("group") or UNGROUPED
                 if g not in groups and g != UNGROUPED:
                     groups.append(g)
+                wfs = e.get("allowed_workflows")
+                e["workflow_mode"] = "all" if wfs is None else "list"
+                e["allowed_workflows"] = wfs if wfs is not None else []
+                e["workflow_restrict"] = wfs is not None
             return {
                 "enabled": bool(self._cfg.get("enabled")),
                 "allow_localhost": bool(self._cfg.get("allow_localhost", True)),
@@ -378,6 +416,8 @@ class AccessControl:
                 "group": "",
                 "ip": (client_ip or "").strip(),
                 "enabled": "",
+                "workflow_mode": "all",
+                "allowed_workflows": [],
             }
         with self._lock:
             for entry in self._cfg.get("ips") or []:
@@ -386,12 +426,15 @@ class AccessControl:
                 try:
                     if _normalize_ip(str(entry.get("ip") or "")) == nip:
                         e = _normalize_entry(entry)
+                        wfs = e.get("allowed_workflows")
                         return {
                             "id": str(e.get("id") or ""),
                             "label": str(e.get("label") or ""),
                             "group": str(e.get("group") or ""),
                             "ip": str(e.get("ip") or nip),
                             "enabled": "1" if e.get("enabled") else "0",
+                            "workflow_mode": "all" if wfs is None else "list",
+                            "allowed_workflows": wfs if wfs is not None else [],
                         }
                 except Exception:
                     continue
@@ -401,6 +444,8 @@ class AccessControl:
             "group": "",
             "ip": nip,
             "enabled": "",
+            "workflow_mode": "all",
+            "allowed_workflows": [],
         }
 
     def client_allowed(self, client_ip: str) -> Tuple[bool, str]:
@@ -786,6 +831,103 @@ class AccessControl:
                 self._remember_group(e["group"])
             if enabled is not None:
                 e["enabled"] = bool(enabled)
+            ips[idx] = e
+            self._cfg["ips"] = ips
+            self._save_unlocked()
+            return e
+
+    def workflow_allowed(self, client_ip: str, filename: str) -> Tuple[bool, str]:
+        """Whether this IP may download/run the named workflow JSON."""
+        fname = _normalize_workflow_name(filename)
+        if not fname:
+            return True, "empty"
+        try:
+            nip = _normalize_ip(client_ip)
+        except Exception:
+            return False, "invalid_client_ip"
+        with self._lock:
+            if self._cfg.get("allow_localhost", True):
+                try:
+                    if ipaddress.ip_address(nip).is_loopback:
+                        return True, "localhost"
+                except Exception:
+                    pass
+            for entry in self._cfg.get("ips") or []:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    if _normalize_ip(str(entry.get("ip") or "")) != nip:
+                        continue
+                except Exception:
+                    continue
+                e = _normalize_entry(entry)
+                allowed = e.get("allowed_workflows")
+                if allowed is None:
+                    return True, "all_workflows"
+                if fname in allowed:
+                    return True, "listed"
+                return False, "workflow_denied:%s" % fname
+        # unknown IP: if ACL off they can use anything; if ACL on they never get here
+        return True, "unknown_ip"
+
+    def set_ip_workflows(
+        self,
+        ip: str = "",
+        entry_id: str = "",
+        mode: str = "all",
+        workflows: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """mode=all → unrestricted. mode=list → only given workflow files."""
+        with self._lock:
+            idx = self._find_index(ip=ip, entry_id=entry_id)
+            if idx < 0:
+                raise ValueError("entry not found")
+            ips = list(self._cfg.get("ips") or [])
+            e = _normalize_entry(ips[idx])
+            m = (mode or "all").strip().lower()
+            if m in ("all", "*", "any"):
+                e["allowed_workflows"] = None
+            else:
+                e["allowed_workflows"] = _normalize_workflows(workflows or [])
+            ips[idx] = e
+            self._cfg["ips"] = ips
+            self._save_unlocked()
+            return e
+
+    def add_ip_workflow(self, ip: str = "", entry_id: str = "", filename: str = "") -> Dict[str, Any]:
+        fname = _normalize_workflow_name(filename)
+        if not fname.endswith(".json"):
+            raise ValueError("workflow must be a .json file name")
+        with self._lock:
+            idx = self._find_index(ip=ip, entry_id=entry_id)
+            if idx < 0:
+                raise ValueError("entry not found")
+            ips = list(self._cfg.get("ips") or [])
+            e = _normalize_entry(ips[idx])
+            cur = e.get("allowed_workflows")
+            if cur is None:
+                cur = []
+            if fname not in cur:
+                cur.append(fname)
+            e["allowed_workflows"] = cur
+            ips[idx] = e
+            self._cfg["ips"] = ips
+            self._save_unlocked()
+            return e
+
+    def remove_ip_workflow(self, ip: str = "", entry_id: str = "", filename: str = "") -> Dict[str, Any]:
+        fname = _normalize_workflow_name(filename)
+        with self._lock:
+            idx = self._find_index(ip=ip, entry_id=entry_id)
+            if idx < 0:
+                raise ValueError("entry not found")
+            ips = list(self._cfg.get("ips") or [])
+            e = _normalize_entry(ips[idx])
+            cur = e.get("allowed_workflows")
+            if cur is None:
+                e["allowed_workflows"] = None
+            else:
+                e["allowed_workflows"] = [w for w in cur if w != fname]
             ips[idx] = e
             self._cfg["ips"] = ips
             self._save_unlocked()

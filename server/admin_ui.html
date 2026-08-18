@@ -178,6 +178,8 @@
         <div id="dashMsg"></div>
         <div class="tabs" style="margin-top:14px;margin-bottom:0">
           <button type="button" class="tab active" data-tab="access">Access control</button>
+          <button type="button" class="tab" data-tab="wfacl">Workflow access</button>
+          <button type="button" class="tab" data-tab="routes">Workflow servers</button>
           <button type="button" class="tab" data-tab="logs">Usage logs</button>
           <button type="button" class="tab hidden" data-tab="users" id="tabUsersBtn">Users &amp; roles</button>
         </div>
@@ -251,6 +253,133 @@
         <div id="machineList"></div>
       </div>
       </div><!-- /tabAccess -->
+
+      <div id="tabWfacl" class="hidden">
+        <div class="card">
+          <h2>Per-IP workflow access</h2>
+          <p class="hint">
+            Pick a machine IP, then <b>Add</b> / <b>Remove</b> which workflow files that IP may download and run.
+            <b>All workflows</b> = no extra limit (current default).
+            <b>Only listed</b> = that IP can use only the files you add.
+          </p>
+          <div class="row">
+            <div style="flex:2 1 260px">
+              <label>Machine IP</label>
+              <select id="wfaclIp"></select>
+            </div>
+            <div>
+              <label>Access</label>
+              <select id="wfaclMode">
+                <option value="all">All workflows</option>
+                <option value="list">Only listed workflows</option>
+              </select>
+            </div>
+          </div>
+          <div id="wfaclListWrap">
+            <div class="row">
+              <div>
+                <label>Add workflow</label>
+                <select id="wfaclAddFile"></select>
+              </div>
+              <div style="flex:0 0 auto;margin-bottom:12px">
+                <button id="btnWfaclAdd" type="button">Add</button>
+              </div>
+            </div>
+            <div class="log-table-wrap">
+              <table>
+                <thead><tr><th>Allowed workflow</th><th></th></tr></thead>
+                <tbody id="wfaclBody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div id="wfaclMsg"></div>
+        </div>
+      </div>
+
+      <div id="tabRoutes" class="hidden">
+        <div class="card">
+          <h2>ComfyUI servers</h2>
+          <p class="hint">
+            Add every ComfyUI box (this machine or another host).
+            Jobs stay gated through <code>:8600/comfyui-r/&lt;id&gt;</code> so Access Control still applies.<br>
+            <b>Ping</b> checks two paths: <b>your browser</b> and <b>this hub (192.168.91.13)</b>.
+            If the page opens in the browser but hub ping fails, the other Linux box is blocking TCP from this hub — open the port on that host (see hint after Ping).
+          </p>
+          <div class="row">
+            <div>
+              <label>ID</label>
+              <input id="srvId" type="text" placeholder="8166" />
+            </div>
+            <div>
+              <label>Name</label>
+              <input id="srvName" type="text" placeholder="ComfyUI-8166" />
+            </div>
+            <div style="flex:2 1 240px">
+              <label>URL</label>
+              <input id="srvUrl" type="text" placeholder="http://192.168.91.11:8166" />
+            </div>
+            <div style="flex:0 0 auto;margin-bottom:12px">
+              <button id="btnAddSrv" type="button">Add / update server</button>
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label>Default server for unmapped workflows</label>
+              <select id="srvDefault"></select>
+            </div>
+          </div>
+          <div class="log-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th><th>Name</th><th>URL</th><th>Status</th><th></th>
+                </tr>
+              </thead>
+              <tbody id="srvBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Workflow → server</h2>
+          <p class="hint">
+            Example: <code>Edit_Image_v08.json</code> → <code>8166</code>
+            (<code>http://192.168.91.11:8166</code>). Click a row to edit notes or change the server.
+          </p>
+          <div class="row">
+            <div>
+              <label>Workflow file</label>
+              <input id="wfFile" type="text" list="wfFileList" placeholder="Edit_Image_v08.json" />
+              <datalist id="wfFileList"></datalist>
+            </div>
+            <div>
+              <label>Run on server</label>
+              <select id="wfServer"></select>
+            </div>
+            <div>
+              <label>Notes</label>
+              <input id="wfNotes" type="text" placeholder="optional" />
+            </div>
+            <div style="flex:0 0 auto;margin-bottom:12px">
+              <button id="btnMapWf" type="button">Assign / update</button>
+            </div>
+          </div>
+          <div class="log-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Workflow</th><th>Server</th><th>Proxy (Nuke uses this)</th><th>Notes</th><th></th>
+                </tr>
+              </thead>
+              <tbody id="wfBody"></tbody>
+            </table>
+          </div>
+          <div class="row tight" style="margin-top:12px">
+            <button id="btnSaveRoutes" type="button">Save all changes</button>
+            <button id="btnReloadRoutes" class="secondary" type="button">Reload</button>
+          </div>
+          <div id="routesMsg"></div>
+        </div>
+      </div>
 
       <div id="tabLogs" class="hidden">
         <div class="card">
@@ -522,6 +651,7 @@
         <td><code>${esc(e.ip)}</code></td>
         <td>${esc(e.label || "—")}</td>
         <td><span class="badge">${esc(e.group || STATE.ungrouped_name)}</span></td>
+        <td>${e.workflow_restrict ? `<span class="badge">${(e.allowed_workflows||[]).length} wf</span>` : `<span class="badge">all</span>`}</td>
         <td>
           ${can("machines.edit") ? `<label class="switch">
             <input type="checkbox" class="tog-ip" data-ip="${esc(e.ip)}" ${on ? "checked" : ""} />
@@ -534,6 +664,7 @@
             data-id="${esc(e.id)}" data-ip="${esc(e.ip)}"
             data-label="${esc(e.label || "")}" data-group="${esc(e.group || "")}"
             data-enabled="${on ? "1" : "0"}">Edit</button>
+          <button type="button" class="secondary btn-wfs" data-ip="${esc(e.ip)}">Workflows</button>
           <button type="button" class="danger btn-rm" data-ip="${esc(e.ip)}" data-id="${esc(e.id)}">Remove</button>` : `<span class="hint">read-only</span>`}
         </td>
       </tr>`;
@@ -542,7 +673,7 @@
     function tableHead() {
       return `<table>
         <thead><tr>
-          <th>IP</th><th>Short name</th><th>Group</th><th>Enabled</th><th>Actions</th>
+          <th>IP</th><th>Short name</th><th>Group</th><th>Workflows</th><th>Enabled</th><th>Actions</th>
         </tr></thead><tbody>`;
     }
 
@@ -579,6 +710,20 @@
       });
       root.querySelectorAll(".btn-edit").forEach((btn) => {
         btn.addEventListener("click", () => openEdit(btn.dataset));
+      });
+      root.querySelectorAll(".btn-wfs").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+          const tab = document.querySelector('.tab[data-tab="wfacl"]');
+          if (tab) tab.classList.add("active");
+          $("tabAccess").classList.add("hidden");
+          $("tabWfacl").classList.remove("hidden");
+          $("tabRoutes").classList.add("hidden");
+          $("tabLogs").classList.add("hidden");
+          $("tabUsers").classList.add("hidden");
+          $("wfaclIp").value = btn.dataset.ip || "";
+          loadRoutes().catch(() => {}).finally(renderWfacl);
+        });
       });
     }
 
@@ -879,6 +1024,204 @@
       }
     };
 
+    // ---- workflow servers ----
+    let ROUTES = { default_server_id: "main", servers: [], workflows: [] };
+    let DISCOVERED = [];
+
+    function fillServerSelects() {
+      const opts = (ROUTES.servers || []).map((s) =>
+        `<option value="${esc(s.id)}">${esc(s.name || s.id)} — ${esc(s.url)}</option>`
+      ).join("");
+      $("srvDefault").innerHTML = opts;
+      $("wfServer").innerHTML = opts;
+      if (ROUTES.default_server_id) $("srvDefault").value = ROUTES.default_server_id;
+    }
+
+    function renderRoutes() {
+      fillServerSelects();
+      $("wfFileList").innerHTML = (DISCOVERED || []).map((f) => `<option value="${esc(f)}"></option>`).join("");
+      const canEdit = can("machines.edit");
+      $("btnAddSrv").style.display = canEdit ? "" : "none";
+      $("btnMapWf").style.display = canEdit ? "" : "none";
+      $("btnSaveRoutes").style.display = canEdit ? "" : "none";
+      $("srvBody").innerHTML = (ROUTES.servers || []).map((s) => `<tr>
+        <td class="mono">${esc(s.id)}</td>
+        <td>${esc(s.name || "")}</td>
+        <td class="mono">${esc(s.url)}</td>
+        <td><span class="badge" id="ping-${esc(s.id)}">…</span></td>
+        <td class="actions">
+          <button type="button" class="secondary btn-ping" data-id="${esc(s.id)}">Ping</button>
+          ${canEdit ? `<button type="button" class="secondary btn-editsrv" data-id="${esc(s.id)}">Edit</button>
+          <button type="button" class="danger btn-delsrv" data-id="${esc(s.id)}">Remove</button>` : ""}
+        </td>
+      </tr>`).join("") || `<tr><td colspan="5" class="hint">No servers yet</td></tr>`;
+      const assigned = new Set((ROUTES.workflows || []).map((w) => w.file));
+      const extra = (DISCOVERED || []).filter((f) => !assigned.has(f)).map((f) => ({
+        file: f, server_id: ROUTES.default_server_id, notes: "", unassigned: true,
+      }));
+      const rows = (ROUTES.workflows || []).concat(extra);
+      $("wfBody").innerHTML = rows.map((w) => {
+        const srv = (ROUTES.servers || []).find((s) => s.id === w.server_id);
+        const proxy = `/comfyui-r/${esc(w.server_id || ROUTES.default_server_id)}`;
+        return `<tr>
+          <td>${esc(w.file)} ${w.unassigned ? `<span class="badge">default</span>` : ""}</td>
+          <td>${esc(srv ? srv.name : w.server_id)} <span class="mono">(${esc(w.server_id || "")})</span></td>
+          <td class="mono">${proxy}</td>
+          <td>${esc(w.notes || "")}</td>
+          <td class="actions">
+            ${canEdit ? `<button type="button" class="secondary btn-editwf" data-file="${esc(w.file)}">Edit</button>
+            ${w.unassigned ? "" : `<button type="button" class="danger btn-delwf" data-file="${esc(w.file)}">Unassign</button>`}` : ""}
+          </td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="5" class="hint">No workflows found</td></tr>`;
+
+      $("srvBody").querySelectorAll(".btn-ping").forEach((b) => {
+        b.onclick = () => pingServer(b.dataset.id);
+      });
+      $("srvBody").querySelectorAll(".btn-editsrv").forEach((b) => {
+        b.onclick = () => {
+          const s = ROUTES.servers.find((x) => x.id === b.dataset.id);
+          if (!s) return;
+          $("srvId").value = s.id;
+          $("srvName").value = s.name || "";
+          $("srvUrl").value = s.url || "";
+        };
+      });
+      $("srvBody").querySelectorAll(".btn-delsrv").forEach((b) => {
+        b.onclick = () => {
+          if (ROUTES.servers.length <= 1) {
+            showMsg($("routesMsg"), "Keep at least one server", false);
+            return;
+          }
+          if (!confirm("Remove server " + b.dataset.id + "?")) return;
+          ROUTES.servers = ROUTES.servers.filter((s) => s.id !== b.dataset.id);
+          if (ROUTES.default_server_id === b.dataset.id) ROUTES.default_server_id = ROUTES.servers[0].id;
+          ROUTES.workflows.forEach((w) => {
+            if (w.server_id === b.dataset.id) w.server_id = ROUTES.default_server_id;
+          });
+          renderRoutes();
+        };
+      });
+      $("wfBody").querySelectorAll(".btn-editwf").forEach((b) => {
+        b.onclick = () => {
+          const w = (ROUTES.workflows || []).find((x) => x.file === b.dataset.file) || { file: b.dataset.file };
+          $("wfFile").value = w.file;
+          $("wfServer").value = w.server_id || ROUTES.default_server_id;
+          $("wfNotes").value = w.notes || "";
+        };
+      });
+      $("wfBody").querySelectorAll(".btn-delwf").forEach((b) => {
+        b.onclick = () => {
+          ROUTES.workflows = (ROUTES.workflows || []).filter((w) => w.file !== b.dataset.file);
+          renderRoutes();
+        };
+      });
+    }
+
+    async function loadRoutes() {
+      const data = await api("/admin/api/comfy-routes");
+      ROUTES = data.config || ROUTES;
+      DISCOVERED = data.discovered_workflows || [];
+      renderRoutes();
+    }
+
+    async function pingFromBrowser(url) {
+      const target = String(url || "").replace(/\/$/, "") + "/system_stats";
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 4000);
+      try {
+        await fetch(target, { signal: ctrl.signal, mode: "no-cors", cache: "no-store" });
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e.name === "AbortError" ? "timed out" : String(e) };
+      } finally {
+        clearTimeout(t);
+      }
+    }
+
+    async function pingServer(id) {
+      const el = document.getElementById("ping-" + id);
+      if (el) { el.textContent = "ping…"; el.className = "badge"; }
+      const srv = (ROUTES.servers || []).find((s) => s.id === id);
+      let browser = { ok: false };
+      if (srv && srv.url) browser = await pingFromBrowser(srv.url);
+      let hub = {};
+      try {
+        hub = await api("/admin/api/comfy-routes/ping?id=" + encodeURIComponent(id));
+      } catch (e) {
+        hub = { ok: false, error: e.message };
+      }
+      if (!el) return;
+      if (hub.ok) {
+        el.textContent = "hub OK " + (hub.ms || 0) + "ms" + (hub.comfyui_version ? " · " + hub.comfyui_version : "");
+        el.className = "badge on";
+        showMsg($("routesMsg"), "Hub can reach " + (srv && srv.url) + " — jobs via :8600 will work.", true);
+        return;
+      }
+      if (browser.ok && !hub.ok) {
+        el.textContent = "browser OK · hub blocked";
+        el.className = "badge off";
+        const hint = hub.hint || ("On that Linux box open the port for 192.168.91.13:  sudo ufw allow from 192.168.91.0/24 to any port " + ((hub.port) || "") + " proto tcp");
+        showMsg($("routesMsg"),
+          "Your browser can open " + (srv && srv.url) + " but this control panel host cannot (TCP timeout). "
+          + "Nuke jobs through :8600 will fail until the remote firewall allows 192.168.91.13. "
+          + hint
+          + (hub.local_alt ? " If ComfyUI is actually on THIS hub, change URL to " + hub.local_alt : ""),
+          false);
+        return;
+      }
+      el.textContent = "fail: " + (hub.error || browser.error || hub.status || "unreachable");
+      el.className = "badge off";
+      showMsg($("routesMsg"), hub.error || "Unreachable from hub and browser.", false);
+    }
+
+    $("btnAddSrv").onclick = () => {
+      const id = $("srvId").value.trim();
+      const name = $("srvName").value.trim() || id;
+      const url = $("srvUrl").value.trim();
+      if (!id || !url) {
+        showMsg($("routesMsg"), "ID and URL required", false);
+        return;
+      }
+      const rest = (ROUTES.servers || []).filter((s) => s.id !== id);
+      rest.push({ id, name, url });
+      ROUTES.servers = rest;
+      renderRoutes();
+      showMsg($("routesMsg"), "Server staged — click Save all changes", true);
+    };
+    $("srvDefault").onchange = () => {
+      ROUTES.default_server_id = $("srvDefault").value;
+    };
+    $("btnMapWf").onclick = () => {
+      const file = $("wfFile").value.trim();
+      const server_id = $("wfServer").value;
+      const notes = $("wfNotes").value.trim();
+      if (!file) {
+        showMsg($("routesMsg"), "Workflow file required", false);
+        return;
+      }
+      const rest = (ROUTES.workflows || []).filter((w) => w.file !== file);
+      rest.push({ file, server_id, notes });
+      ROUTES.workflows = rest;
+      renderRoutes();
+      showMsg($("routesMsg"), "Assignment staged — click Save all changes", true);
+    };
+    $("btnSaveRoutes").onclick = async () => {
+      try {
+        ROUTES.default_server_id = $("srvDefault").value || ROUTES.default_server_id;
+        const saved = await api("/admin/api/comfy-routes/save", {
+          method: "POST",
+          body: JSON.stringify(ROUTES),
+        });
+        ROUTES = saved.config || ROUTES;
+        renderRoutes();
+        showMsg($("routesMsg"), "Saved. Nuke jobs use the new mapping immediately.", true);
+      } catch (e) {
+        showMsg($("routesMsg"), e.message, false);
+      }
+    };
+    $("btnReloadRoutes").onclick = () => loadRoutes().catch((e) => showMsg($("routesMsg"), e.message, false));
+
     // ---- tabs ----
     document.querySelectorAll(".tab").forEach((tab) => {
       tab.addEventListener("click", () => {
@@ -886,12 +1229,126 @@
         tab.classList.add("active");
         const name = tab.dataset.tab;
         $("tabAccess").classList.toggle("hidden", name !== "access");
+        $("tabWfacl").classList.toggle("hidden", name !== "wfacl");
+        $("tabRoutes").classList.toggle("hidden", name !== "routes");
         $("tabLogs").classList.toggle("hidden", name !== "logs");
         $("tabUsers").classList.toggle("hidden", name !== "users");
         if (name === "logs") loadLogs();
         if (name === "users") loadUsers();
+        if (name === "routes") loadRoutes().catch((e) => showMsg($("routesMsg"), e.message, false));
+        if (name === "wfacl") {
+          loadRoutes().catch(() => {}).finally(renderWfacl);
+        }
       });
     });
+
+    function knownWorkflowFiles() {
+      const fromRoutes = (typeof ROUTES !== "undefined" && ROUTES.workflows)
+        ? ROUTES.workflows.map((w) => w.file) : [];
+      const extra = ["Edit_Image_v08.json", "Image_generation_v01.json", "video_minimax_h3_i2v.json"];
+      return Array.from(new Set(fromRoutes.concat(extra).concat(typeof DISCOVERED !== "undefined" ? DISCOVERED : []))).filter(Boolean);
+    }
+
+    function selectedAclMachine() {
+      const ip = $("wfaclIp").value;
+      return (STATE.ips || []).find((e) => e.ip === ip) || null;
+    }
+
+    function renderWfacl() {
+      const sel = $("wfaclIp");
+      const cur = sel.value;
+      const ips = STATE.ips || [];
+      sel.innerHTML = ips.map((e) =>
+        `<option value="${esc(e.ip)}">${esc(e.ip)} — ${esc(e.label || "no name")} (${esc(e.group || "Ungrouped")})</option>`
+      ).join("") || `<option value="">No machines — add IPs first</option>`;
+      if (cur && ips.some((e) => e.ip === cur)) sel.value = cur;
+      const m = selectedAclMachine();
+      const canEdit = can("machines.edit");
+      $("btnWfaclAdd").style.display = canEdit ? "" : "none";
+      $("wfaclMode").disabled = !canEdit || !m;
+      if (!m) {
+        $("wfaclBody").innerHTML = `<tr><td colspan="2" class="hint">Select an IP</td></tr>`;
+        $("wfaclListWrap").style.opacity = "0.5";
+        return;
+      }
+      const mode = m.workflow_restrict ? "list" : "all";
+      $("wfaclMode").value = mode;
+      $("wfaclListWrap").style.opacity = mode === "list" ? "1" : "0.45";
+      const have = m.allowed_workflows || [];
+      $("wfaclBody").innerHTML = have.map((f) => `<tr>
+        <td class="mono">${esc(f)}</td>
+        <td class="actions">${canEdit ? `<button type="button" class="danger btn-wfacl-rm" data-file="${esc(f)}">Remove</button>` : ""}</td>
+      </tr>`).join("") || `<tr><td colspan="2" class="hint">${mode === "all" ? "All workflows allowed — switch to “Only listed” then Add." : "None yet — Add a workflow above."}</td></tr>`;
+      const unused = knownWorkflowFiles().filter((f) => have.indexOf(f) < 0);
+      $("wfaclAddFile").innerHTML = unused.map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join("")
+        || `<option value="">(none left)</option>`;
+      $("wfaclBody").querySelectorAll(".btn-wfacl-rm").forEach((b) => {
+        b.onclick = () => wfaclRemove(b.dataset.file);
+      });
+    }
+
+    async function wfaclSetMode(mode) {
+      const m = selectedAclMachine();
+      if (!m) return;
+      const workflows = mode === "list" ? (m.allowed_workflows || []) : [];
+      await api("/admin/api/set_ip_workflows", {
+        method: "POST",
+        body: JSON.stringify({ ip: m.ip, id: m.id, mode, workflows }),
+      });
+      await refresh(false);
+      renderWfacl();
+    }
+
+    async function wfaclAdd() {
+      const m = selectedAclMachine();
+      const file = $("wfaclAddFile").value;
+      if (!m || !file) return;
+      try {
+        if (!m.workflow_restrict) {
+          await api("/admin/api/set_ip_workflows", {
+            method: "POST",
+            body: JSON.stringify({ ip: m.ip, id: m.id, mode: "list", workflows: [file] }),
+          });
+        } else {
+          await api("/admin/api/ip_workflow_add", {
+            method: "POST",
+            body: JSON.stringify({ ip: m.ip, id: m.id, file }),
+          });
+        }
+        showMsg($("wfaclMsg"), "Added " + file + " for " + m.ip, true);
+        await refresh(false);
+        renderWfacl();
+      } catch (e) {
+        showMsg($("wfaclMsg"), e.message, false);
+      }
+    }
+
+    async function wfaclRemove(file) {
+      const m = selectedAclMachine();
+      if (!m || !file) return;
+      try {
+        await api("/admin/api/ip_workflow_remove", {
+          method: "POST",
+          body: JSON.stringify({ ip: m.ip, id: m.id, file }),
+        });
+        showMsg($("wfaclMsg"), "Removed " + file + " from " + m.ip, true);
+        await refresh(false);
+        renderWfacl();
+      } catch (e) {
+        showMsg($("wfaclMsg"), e.message, false);
+      }
+    }
+
+    $("wfaclIp").addEventListener("change", renderWfacl);
+    $("wfaclMode").addEventListener("change", async () => {
+      try {
+        await wfaclSetMode($("wfaclMode").value);
+        showMsg($("wfaclMsg"), "Updated access mode", true);
+      } catch (e) {
+        showMsg($("wfaclMsg"), e.message, false);
+      }
+    });
+    $("btnWfaclAdd").onclick = wfaclAdd;
 
     async function loadUsers() {
       if (!can("users.manage")) return;

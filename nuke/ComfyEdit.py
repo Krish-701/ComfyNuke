@@ -21,6 +21,7 @@ import os
 import socket
 import sys
 import tempfile
+import urllib.request
 import uuid
 
 # ---------------------------------------------------------------------------
@@ -119,6 +120,87 @@ if _raw_server.endswith(":8188") or (
         DEFAULT_SERVER = _raw_server
 else:
     DEFAULT_SERVER = _raw_server
+
+_CODE_BASE = (
+    (os.environ.get("COMFYNUKE_CODE_BASE") or "").strip()
+    or str(_STUDIO.get("code_base_url") or "").strip()
+    or "http://192.168.91.13:8600"
+).rstrip("/")
+
+
+def _workflow_basename(path):
+    return os.path.basename(str(path or "").replace("\\", "/"))
+
+
+def _load_local_routes():
+    """Read workflow_routes / studio_config already synced to this machine."""
+    cfg = {"servers": [], "workflows": [], "default_server_id": "main"}
+    for name in ("workflow_routes.json", "studio_config.json"):
+        path = os.path.join(REPO_ROOT, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        if name == "workflow_routes.json":
+            return data
+        servers = data.get("comfy_servers") or []
+        wr = data.get("workflow_routes") or {}
+        cfg["servers"] = servers
+        cfg["default_server_id"] = data.get("default_server_id") or "main"
+        cfg["workflows"] = [
+            {"file": k, "server_id": v} for k, v in wr.items() if k
+        ]
+        return cfg
+    return cfg
+
+
+def _fetch_live_routes(timeout=4.0):
+    url = _CODE_BASE + "/api/comfy-routes"
+    try:
+        raw = urllib.request.urlopen(url, timeout=timeout).read()
+        data = json.loads(raw.decode("utf-8"))
+        if isinstance(data, dict) and data.get("config"):
+            return data
+    except Exception:
+        pass
+    return None
+
+
+def resolve_server_for_workflow(workflow_path, fallback=None):
+    """
+    Map a workflow JSON to the ComfyUI proxy URL set in the :8600 control panel.
+
+    Jobs stay gated: http://HUB:8600/comfyui-r/<server_id>
+    """
+    fallback = (fallback or DEFAULT_SERVER or "").strip() or DEFAULT_SERVER
+    live = _fetch_live_routes()
+    cfg = (live or {}).get("config") if live else None
+    if not cfg:
+        cfg = _load_local_routes()
+    fname = _workflow_basename(workflow_path)
+    sid = None
+    for w in cfg.get("workflows") or []:
+        if str(w.get("file") or "") == fname:
+            sid = str(w.get("server_id") or "").strip()
+            break
+    if not sid:
+        wr = (_STUDIO.get("workflow_routes") or {})
+        sid = str(wr.get(fname) or "").strip()
+    if not sid:
+        return fallback
+    host = _CODE_BASE
+    if live and live.get("client_servers"):
+        for s in live["client_servers"]:
+            if str(s.get("id")) == sid and s.get("proxy"):
+                return str(s["proxy"]).rstrip("/")
+    return ("%s/comfyui-r/%s" % (host, sid)).rstrip("/")
+
+
 # Default artist prompt for Edit Image panel (appended / shown in Nuke UI)
 DEFAULT_EDIT_PROMPT = (
     "seamless background continuation matching surrounding lighting, "
@@ -2209,6 +2291,9 @@ def run_edit_on_node(
 
     # Always take the hub's latest graph before this job (not the Nuke cache).
     wf_path = _refresh_workflow_from_server(wf_path)
+    mapped = resolve_server_for_workflow(wf_path, fallback=server)
+    if mapped:
+        server = mapped
 
     # --- Phase 1: Nuke Write (plate_srgb + mask_luma) ---
     _BG_JOB_ACTIVE = True
@@ -2786,8 +2871,8 @@ def schedule_edit(
         nuke.message("Prompt is empty")
         return
 
-    server = (server or DEFAULT_SERVER).strip()
     workflow = workflow or DEFAULT_WORKFLOW
+    server = resolve_server_for_workflow(workflow, fallback=server or DEFAULT_SERVER)
     output_dir = output_dir or DEFAULT_OUT
 
     if _attempt == 0:
@@ -2849,9 +2934,11 @@ def show_panel(initial_prompt=None):
         def __init__(self, prompt_text):
             nukescripts.PythonPanel.__init__(self, "Pix-Edit Image")
             self.server = nuke.String_Knob("server", "Server")
-            self.server.setValue(DEFAULT_SERVER)
             self.workflow = nuke.File_Knob("workflow", "Workflow")
             self.workflow.setValue(DEFAULT_WORKFLOW)
+            self.server.setValue(
+                resolve_server_for_workflow(DEFAULT_WORKFLOW, fallback=DEFAULT_SERVER)
+            )
             self.prompt = nuke.Multiline_Eval_String_Knob("prompt", "Prompt")
             self.prompt.setValue(prompt_text)
             self.seed = nuke.Int_Knob("seed", "Seed")
@@ -3275,8 +3362,8 @@ def schedule_image_gen(
         )
         return
 
-    server = (server or DEFAULT_SERVER).strip()
     wf_path = workflow or IMAGE_GEN_WORKFLOW
+    server = resolve_server_for_workflow(wf_path, fallback=server or DEFAULT_SERVER)
     # Pull latest Image_generation_*.json from code server before using cache
     try:
         wf_path = _refresh_workflow_from_server(wf_path)
@@ -3433,9 +3520,11 @@ def show_image_gen_panel():
         def __init__(self):
             nukescripts.PythonPanel.__init__(self, "ComfyUI Image Gen")
             self.server = nuke.String_Knob("server", "Server")
-            self.server.setValue(DEFAULT_SERVER)
             self.workflow = nuke.File_Knob("workflow", "Workflow")
             self.workflow.setValue(IMAGE_GEN_WORKFLOW)
+            self.server.setValue(
+                resolve_server_for_workflow(IMAGE_GEN_WORKFLOW, fallback=DEFAULT_SERVER)
+            )
             self.prompt = nuke.Multiline_Eval_String_Knob("prompt", "Prompt")
             self.prompt.setValue("mountain landscape")
             self.width = nuke.Int_Knob("width", "Width")
@@ -3571,8 +3660,8 @@ def schedule_image_to_video(
         )
         return
 
-    server = (server or DEFAULT_SERVER).strip()
     wf_path = workflow or I2V_WORKFLOW
+    server = resolve_server_for_workflow(wf_path, fallback=server or DEFAULT_SERVER)
     try:
         wf_path = _refresh_workflow_from_server(wf_path)
     except Exception as e:
@@ -3687,9 +3776,11 @@ def show_image_to_video_panel():
         def __init__(self):
             nukescripts.PythonPanel.__init__(self, "ComfyUI Image to Video")
             self.server = nuke.String_Knob("server", "Server")
-            self.server.setValue(DEFAULT_SERVER)
             self.workflow = nuke.File_Knob("workflow", "Workflow")
             self.workflow.setValue(I2V_WORKFLOW)
+            self.server.setValue(
+                resolve_server_for_workflow(I2V_WORKFLOW, fallback=DEFAULT_SERVER)
+            )
             self.prompt = nuke.Multiline_Eval_String_Knob("prompt", "Prompt")
             self.prompt.setValue("gentle camera move, natural motion")
             self.seed = nuke.Int_Knob("seed", "Seed")

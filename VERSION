@@ -1,3 +1,3 @@
 # Human-readable package label (optional).
 # Content version is always the hash from /manifest.json on the code server.
-1.1.0-version-check
+1.2.0-workflow-servers

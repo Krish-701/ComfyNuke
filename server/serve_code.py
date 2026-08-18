@@ -43,6 +43,14 @@ if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
 from access_control import AccessControl  # noqa: E402
+from workflow_routes import (  # noqa: E402
+    default_upstream,
+    load_routes,
+    ping_upstream,
+    save_routes,
+    server_by_id,
+    snapshot as routes_snapshot,
+)
 from usage_log import (  # noqa: E402
     UsageLog,
     classify_comfy_path,
@@ -69,6 +77,7 @@ ALLOWED_PREFIXES = (
     "video_minimax_h3_i2v.json",
     "studio_config.json",
     "studio_config.example.json",
+    "workflow_routes.json",
     "VERSION",
     "README.md",
     "PLAYBOOK.md",
@@ -86,6 +95,7 @@ SYNC_FILES = (
     "video_minimax_h3_i2v.json",
     "studio_config.json",
     "studio_config.example.json",
+    "workflow_routes.json",
 )
 
 # Never serve
@@ -168,7 +178,7 @@ def build_manifest(root: Path) -> Dict[str, Any]:
 
 
 class ComfyNukeHandler(SimpleHTTPRequestHandler):
-    server_version = "ComfyNukeCode/1.3"
+    server_version = "ComfyNukeCode/1.4"
     # Injected in main()
     access: AccessControl
     usage: UsageLog
@@ -185,6 +195,12 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
         SimpleHTTPRequestHandler.end_headers(self)
+
+    def _repo_root(self) -> Path:
+        try:
+            return Path(self.directory).resolve()
+        except Exception:
+            return Path(".").resolve()
 
     def _client_ip(self) -> str:
         # Always use TCP peer address. Do NOT trust X-Forwarded-For (artists
@@ -394,6 +410,29 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": True, "users": self.access.list_users()})
             return True
 
+        if path_only == "/admin/api/comfy-routes":
+            if not self._require_perm("machines.view"):
+                return True
+            self._send_json(routes_snapshot(self._repo_root()))
+            return True
+
+        if path_only == "/admin/api/comfy-routes/ping":
+            if not self._require_perm("machines.view"):
+                return True
+            qs = parse_qs(urlparse(self.path).query)
+            sid = str((qs.get("id") or [""])[0] or "").strip()
+            cfg = load_routes(self._repo_root())
+            srv = server_by_id(cfg, sid) if sid else None
+            if not srv:
+                self._send_json({"ok": False, "error": "unknown server id"}, status=404)
+                return True
+            info = ping_upstream(str(srv.get("url") or ""))
+            info["id"] = sid
+            info["url"] = srv.get("url")
+            info["name"] = srv.get("name")
+            self._send_json(info)
+            return True
+
         # ---- usage logs (auth required) ----
         if path_only in (
             "/admin/api/logs",
@@ -573,6 +612,10 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             "/admin/api/users/create": "users.manage",
             "/admin/api/users/update": "users.manage",
             "/admin/api/users/delete": "users.manage",
+            "/admin/api/comfy-routes/save": "machines.edit",
+            "/admin/api/set_ip_workflows": "machines.edit",
+            "/admin/api/ip_workflow_add": "machines.edit",
+            "/admin/api/ip_workflow_remove": "machines.edit",
         }
 
         try:
@@ -699,6 +742,35 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                     return True
                 self._send_json({"ok": True})
                 return True
+            if path_only == "/admin/api/comfy-routes/save":
+                saved = save_routes(self._repo_root(), data)
+                self._send_json({"ok": True, "config": saved})
+                return True
+            if path_only == "/admin/api/set_ip_workflows":
+                e = self.access.set_ip_workflows(
+                    ip=str(data.get("ip") or ""),
+                    entry_id=str(data.get("id") or ""),
+                    mode=str(data.get("mode") or "all"),
+                    workflows=data.get("workflows") or data.get("allowed_workflows"),
+                )
+                self._send_json({"ok": True, "entry": e})
+                return True
+            if path_only == "/admin/api/ip_workflow_add":
+                e = self.access.add_ip_workflow(
+                    ip=str(data.get("ip") or ""),
+                    entry_id=str(data.get("id") or ""),
+                    filename=str(data.get("file") or data.get("workflow") or ""),
+                )
+                self._send_json({"ok": True, "entry": e})
+                return True
+            if path_only == "/admin/api/ip_workflow_remove":
+                e = self.access.remove_ip_workflow(
+                    ip=str(data.get("ip") or ""),
+                    entry_id=str(data.get("id") or ""),
+                    filename=str(data.get("file") or data.get("workflow") or ""),
+                )
+                self._send_json({"ok": True, "entry": e})
+                return True
         except ValueError as e:
             self._send_json({"error": str(e)}, status=400)
             return True
@@ -809,21 +881,38 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
         if not self._require_artist_ip():
             return
         ident = self._identity()
-        # Map /comfyui/foo -> upstream/foo
+        # /comfyui/foo            -> default upstream
+        # /comfyui-r/<server_id>/foo -> named backend
         parsed = urlparse(self.path)
-        prefix = "/comfyui"
-        path = parsed.path
-        if path == prefix:
+        raw_path = parsed.path
+        cfg = load_routes(self._repo_root())
+        upstream = default_upstream(cfg, self.comfy_upstream)
+        path = raw_path
+        if path == "/comfyui-r" or path.startswith("/comfyui-r/"):
+            rest = path[len("/comfyui-r") :].lstrip("/")
+            parts = rest.split("/", 1)
+            sid = parts[0] if parts and parts[0] else ""
+            path = "/" + (parts[1] if len(parts) > 1 else "")
+            srv = server_by_id(cfg, sid)
+            if not srv:
+                self._send_bytes(
+                    ("unknown ComfyUI server id: %s\n" % sid).encode("utf-8"),
+                    "text/plain; charset=utf-8",
+                    status=404,
+                )
+                return
+            upstream = str(srv.get("url") or "").rstrip("/")
+        elif path == "/comfyui":
             path = "/"
-        elif path.startswith(prefix + "/"):
-            path = path[len(prefix) :]
+        elif path.startswith("/comfyui/"):
+            path = path[len("/comfyui") :]
         else:
             self.send_error(404)
             return
         if not path.startswith("/"):
             path = "/" + path
         qs = ("?" + parsed.query) if parsed.query else ""
-        target = self.comfy_upstream.rstrip("/") + path + qs
+        target = upstream.rstrip("/") + path + qs
 
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length > 0 else None
@@ -900,8 +989,59 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             self.send_error(404)
             return
 
-        # ComfyUI reverse proxy (IP gated)
-        if path_only == "/comfyui" or path_only.startswith("/comfyui/"):
+        # Live route table for Nuke (IP gated + per-IP workflow filter)
+        if path_only in ("/api/comfy-routes", "/comfy-routes.json"):
+            if not self._require_artist_ip():
+                return
+            snap = routes_snapshot(self._repo_root())
+            cfg = snap.get("config") or {}
+            ip = self._client_ip()
+            wfs = []
+            for w in cfg.get("workflows") or []:
+                fname = str(w.get("file") or "")
+                ok, _reason = self.access.workflow_allowed(ip, fname)
+                if ok:
+                    wfs.append(w)
+            cfg = dict(cfg)
+            cfg["workflows"] = wfs
+            snap["config"] = cfg
+            discovered = []
+            for name in snap.get("discovered_workflows") or []:
+                ok, _ = self.access.workflow_allowed(ip, name)
+                if ok:
+                    discovered.append(name)
+            snap["discovered_workflows"] = discovered
+            ident = self._identity()
+            snap["workflow_mode"] = ident.get("workflow_mode") or "all"
+            snap["allowed_workflows"] = ident.get("allowed_workflows") or []
+            host = self.headers.get("Host") or "192.168.91.13:8600"
+            scheme = "http"
+            base = "%s://%s" % (scheme, host)
+            clients = []
+            for s in cfg.get("servers") or []:
+                sid = str(s.get("id") or "")
+                clients.append(
+                    {
+                        "id": sid,
+                        "name": s.get("name") or sid,
+                        "upstream": s.get("url"),
+                        "proxy": "%s/comfyui-r/%s" % (base, sid)
+                        if sid
+                        else "%s/comfyui" % base,
+                    }
+                )
+            snap["client_servers"] = clients
+            snap["default_proxy"] = "%s/comfyui" % base
+            self._send_json(snap)
+            return
+
+        # ComfyUI reverse proxy (IP gated) — /comfyui and /comfyui-r/<id>
+        if (
+            path_only == "/comfyui"
+            or path_only.startswith("/comfyui/")
+            or path_only == "/comfyui-r"
+            or path_only.startswith("/comfyui-r/")
+        ):
             self._proxy_comfy("GET")
             return
 
@@ -941,6 +1081,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 pass
             ip = self._client_ip()
             ok, reason = self.access.client_allowed(ip)
+            ident = self.access.lookup_machine(ip)
             self._send_json(
                 {
                     "allowed": ok,
@@ -948,6 +1089,8 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                     "reason": reason,
                     "acl_enabled": self.access.is_acl_enabled(),
                     "comfy_proxy": "/comfyui",
+                    "workflow_mode": ident.get("workflow_mode") or "all",
+                    "allowed_workflows": ident.get("allowed_workflows") or [],
                 },
                 status=200 if ok else 403,
             )
@@ -971,6 +1114,20 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
         if path_only in ("/manifest.json", "/manifest"):
             try:
                 manifest = build_manifest(Path(self.directory).resolve())  # type: ignore[attr-defined]
+                ip = self._client_ip()
+                files = []
+                for f in manifest.get("files") or []:
+                    rel = str(f.get("path") or "")
+                    if rel.endswith(".json") and "/" not in rel and rel not in (
+                        "studio_config.json",
+                        "studio_config.example.json",
+                        "workflow_routes.json",
+                    ):
+                        ok, _ = self.access.workflow_allowed(ip, rel)
+                        if not ok:
+                            continue
+                    files.append(f)
+                manifest["files"] = files
                 body = json.dumps(manifest, indent=2).encode("utf-8")
             except Exception as e:
                 body = json.dumps({"error": str(e)}).encode("utf-8")
@@ -978,6 +1135,24 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 return
             self._send_bytes(body, "application/json; charset=utf-8")
             return
+
+        # Block workflow JSON this IP is not allowed to use
+        rel_req = path_only.lstrip("/")
+        if rel_req.endswith(".json") and "/" not in rel_req and rel_req not in (
+            "studio_config.json",
+            "studio_config.example.json",
+            "workflow_routes.json",
+        ):
+            ok_wf, why = self.access.workflow_allowed(self._client_ip(), rel_req)
+            if not ok_wf:
+                self._send_bytes(
+                    ("workflow not allowed for this IP: %s (%s)\n" % (rel_req, why)).encode(
+                        "utf-8"
+                    ),
+                    "text/plain; charset=utf-8",
+                    status=403,
+                )
+                return
 
         translated = self.translate_path(self.path)
         if translated.endswith(".forbidden") or not os.path.isfile(translated):
@@ -1013,21 +1188,36 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 return
             self.send_error(404)
             return
-        if path_only == "/comfyui" or path_only.startswith("/comfyui/"):
+        if (
+            path_only == "/comfyui"
+            or path_only.startswith("/comfyui/")
+            or path_only == "/comfyui-r"
+            or path_only.startswith("/comfyui-r/")
+        ):
             self._proxy_comfy("POST")
             return
         self.send_error(405, "POST not allowed on code paths")
 
     def do_PUT(self) -> None:
         path_only = urlparse(self.path).path
-        if path_only == "/comfyui" or path_only.startswith("/comfyui/"):
+        if (
+            path_only == "/comfyui"
+            or path_only.startswith("/comfyui/")
+            or path_only == "/comfyui-r"
+            or path_only.startswith("/comfyui-r/")
+        ):
             self._proxy_comfy("PUT")
             return
         self.send_error(405, "PUT not allowed")
 
     def do_DELETE(self) -> None:
         path_only = urlparse(self.path).path
-        if path_only == "/comfyui" or path_only.startswith("/comfyui/"):
+        if (
+            path_only == "/comfyui"
+            or path_only.startswith("/comfyui/")
+            or path_only == "/comfyui-r"
+            or path_only.startswith("/comfyui-r/")
+        ):
             self._proxy_comfy("DELETE")
             return
         self.send_error(405, "DELETE not allowed")

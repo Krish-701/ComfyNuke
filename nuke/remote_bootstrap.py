@@ -58,9 +58,10 @@ _SYNC_FILES = (
     "video_minimax_h3_i2v.json",
     "studio_config.json",  # optional
     "studio_config.example.json",
+    "workflow_routes.json",
 )
 
-_OPTIONAL = frozenset(["studio_config.json"])
+_OPTIONAL = frozenset(["studio_config.json", "workflow_routes.json"])
 # Always re-download these from the hub on every Nuke launch (never keep stale
 # artist-cache copies after the server graph/scripts are edited).
 _ALWAYS_REFRESH = frozenset(
@@ -70,6 +71,8 @@ _ALWAYS_REFRESH = frozenset(
         "Edit_Image_v08.json",
         "Image_generation_v01.json",
         "video_minimax_h3_i2v.json",
+        "workflow_routes.json",
+        "studio_config.json",
     ]
 )
 _LOCAL_MANIFEST = ".comfynuke_manifest.json"
