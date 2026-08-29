@@ -8,25 +8,20 @@
     },
     {
       "id": "8166",
-      "name": "Linux - 1",
-      "url": "http://192.168.91.11:8166"
+      "name": "Edit ComfyUI :8166",
+      "url": "http://127.0.0.1:8166"
     },
     {
       "id": "8177",
-      "name": "Linux - 1",
-      "url": "http://192.168.91.11:8177"
-    },
-    {
-      "id": "0000",
-      "name": "Temp",
-      "url": "http://127.0.0.1:0000"
+      "name": "Production ComfyUI :8177",
+      "url": "http://127.0.0.1:8177"
     }
   ],
   "workflows": [
     {
       "file": "Edit_Image_v08.json",
       "server_id": "8166",
-      "notes": "Edit image on ComfyUI-8166"
+      "notes": "Edit Image needs WAS Node Suite on :8166 (Text Multiline, Mask Invert)"
     },
     {
       "file": "Image_generation_v01.json",
@@ -34,9 +29,9 @@
       "notes": ""
     },
     {
-      "file": "video_minimax_h3_i2v.json",
-      "server_id": "0000",
-      "notes": "MiniMax H3 I2V"
+      "file": "Image_Description_v01.json",
+      "server_id": "8177",
+      "notes": "Ollama describe: user text node 4, LoadImage 5, PreviewAny 12"
     }
   ]
 }

@@ -1,5 +1,7 @@
 # PLAYBOOK — Krish-ComfyNuke (Nuke ↔ ComfyUI)
 
+**Studio operators (start/stop/admin UI):** see [docs/STUDIO_PLAYBOOK.md](docs/STUDIO_PLAYBOOK.md).
+
 Handoff for an autonomous agent that will run commands and edit files.
 Labels: **[VERIFIED]** observed in this workspace/code/runtime · **[INFERRED]** follows from code/evidence, not end-to-end retested here · **[ASSUMED]** no proof — verify before acting · **GAP** unknown, do not invent.
 

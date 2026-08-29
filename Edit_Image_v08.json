@@ -229,7 +229,7 @@
   },
   "80": {
     "inputs": {
-      "image": "plate_srgb (6).png"
+      "image": "007a64f2-1291-4ec7-ae8b-509d0515a7a6.png"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -238,8 +238,8 @@
   },
   "106": {
     "inputs": {
-      "model_name": "qwen2.5vl:7b",
-      "base_url": "http://127.0.0.0:11434/",
+      "model_name": "gemma4:26b-a4b-it-qat",
+      "base_url": "http://192.168.91.11:11434",
       "api_key": "",
       "is_ollama": true,
       "Get Models": "Get Models"
@@ -284,18 +284,6 @@
     "class_type": "LLM",
     "_meta": {
       "title": "☁️API LLM general link"
-    }
-  },
-  "108": {
-    "inputs": {
-      "text": [
-        "107",
-        0
-      ]
-    },
-    "class_type": "ShowText|pysssss",
-    "_meta": {
-      "title": "Show Text 🐍"
     }
   },
   "109": {
@@ -383,7 +371,7 @@
   },
   "123": {
     "inputs": {
-      "image": "mask_luma (1).png"
+      "image": "007a64f2-1291-4ec7-ae8b-509d0515a7a6.png"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -415,18 +403,6 @@
       "title": "Mask Invert"
     }
   },
-  "140": {
-    "inputs": {
-      "mask": [
-        "119",
-        2
-      ]
-    },
-    "class_type": "MaskPreview+",
-    "_meta": {
-      "title": "🔧 Mask Preview"
-    }
-  },
   "141": {
     "inputs": {
       "images": [
@@ -437,6 +413,19 @@
     "class_type": "PreviewImage",
     "_meta": {
       "title": "Preview Image"
+    }
+  },
+  "143": {
+    "inputs": {
+      "output": "",
+      "source": [
+        "107",
+        0
+      ]
+    },
+    "class_type": "Display Any (rgthree)",
+    "_meta": {
+      "title": "Display Any (rgthree)"
     }
   },
   "16:78": {

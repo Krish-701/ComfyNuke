@@ -146,6 +146,8 @@ def _find_user_prompt_inject(wf: Dict[str, Any]) -> Tuple[Optional[str], str]:
         if "llm" not in ct and "chat" not in ct:
             continue
         up = (node.get("inputs") or {}).get("user_prompt_input")
+        if not isinstance(up, list):
+            up = (node.get("inputs") or {}).get("user_prompt")
         if isinstance(up, list) and len(up) >= 1:
             tid = str(up[0])
             if tid in wf:
@@ -169,6 +171,8 @@ def _find_user_prompt_inject(wf: Dict[str, Any]) -> Tuple[Optional[str], str]:
                 if not isinstance(node, dict):
                     continue
                 sp = (node.get("inputs") or {}).get("system_prompt_input")
+                if not isinstance(sp, list):
+                    sp = (node.get("inputs") or {}).get("system_prompt")
                 if isinstance(sp, list) and len(sp) >= 1:
                     sys_ids.add(str(sp[0]))
             for pnid in _find_all_node_ids(wf, "PrimitiveStringMultiline"):
@@ -181,6 +185,8 @@ def _find_user_prompt_inject(wf: Dict[str, Any]) -> Tuple[Optional[str], str]:
         if not isinstance(node, dict):
             continue
         sp = (node.get("inputs") or {}).get("system_prompt_input")
+        if not isinstance(sp, list):
+            sp = (node.get("inputs") or {}).get("system_prompt")
         if isinstance(sp, list) and len(sp) >= 1:
             sys_ids.add(str(sp[0]))
     for pnid in _find_all_node_ids(wf, "PrimitiveStringMultiline"):
@@ -558,6 +564,7 @@ class ComfyClient:
         filename_prefix: Optional[str] = None,
         workflow: Optional[Dict[str, Any]] = None,
         mask_image_name: Optional[str] = None,
+        require_save: bool = True,
     ) -> Dict[str, Any]:
         if workflow is None:
             if self._workflow_template is None:
@@ -674,7 +681,27 @@ class ComfyClient:
             and (node.get("class_type") or "")
             in ("SaveVideo", "VHS_VideoCombine", "CreateVideo")
         ]
-        if save_id:
+        if not require_save:
+            self.id_save = save_id or (video_saver_ids[0] if video_saver_ids else None)
+            # Display Any (rgthree) often stores empty text in /history.
+            # Attach PreviewAny to LLM STRING slot 0 so Nuke can read the prompt.
+            llm_id = None
+            for nid, node in wf.items():
+                if isinstance(node, dict) and node.get("class_type") == "LLM":
+                    llm_id = str(nid)
+                    break
+            text_capture = _find_node_id(wf, "PreviewAny")
+            if llm_id and not text_capture:
+                text_capture = "9010"
+                while text_capture in wf:
+                    text_capture = str(int(text_capture) + 1)
+                wf[text_capture] = {
+                    "class_type": "PreviewAny",
+                    "inputs": {"source": [llm_id, 0]},
+                    "_meta": {"title": "Nuke text capture"},
+                }
+            self.id_text_out = text_capture or llm_id
+        elif save_id:
             self.id_save = save_id
             _set(save_id, "filename_prefix", prefix)
         elif video_saver_ids:
@@ -939,6 +966,90 @@ class ComfyClient:
                     if isinstance(item, dict) and item.get("filename"):
                         files.append(item)
         return files
+
+    @staticmethod
+    def extract_text_output(entry: Dict[str, Any], node_id: str = "20") -> str:
+        """Pull LLM / PreviewAny / Display Any text from a history entry."""
+
+        skip_keys = {
+            "filename",
+            "subfolder",
+            "type",
+            "format",
+            "abs_path",
+            "name",
+        }
+
+        def _flatten(val: Any) -> Optional[str]:
+            if val is None:
+                return None
+            if isinstance(val, str):
+                s = val.strip()
+                return s or None
+            if isinstance(val, (int, float, bool)):
+                return None
+            if isinstance(val, list):
+                parts = []
+                for item in val:
+                    got = _flatten(item)
+                    if got:
+                        parts.append(got)
+                return "\n".join(parts) if parts else None
+            if isinstance(val, dict):
+                if val.get("filename"):
+                    return None
+                prefer = (
+                    "text",
+                    "string",
+                    "STRING",
+                    "output",
+                    "any",
+                    "value",
+                    "content",
+                    "result",
+                    "assistant_response",
+                )
+                lower_map = {str(k).lower(): v for k, v in val.items()}
+                for k in prefer:
+                    if k.lower() in lower_map:
+                        got = _flatten(lower_map[k.lower()])
+                        if got:
+                            return got
+                best = None
+                for k, v in val.items():
+                    if str(k).lower() in skip_keys:
+                        continue
+                    got = _flatten(v)
+                    if got and (best is None or len(got) > len(best)):
+                        best = got
+                return best
+            return None
+
+        outputs = entry.get("outputs") or {}
+        nid = str(node_id)
+        ordered_ids = []
+        if nid:
+            ordered_ids.append(nid)
+        # Prefer PreviewAny / SaveText-style nodes over Display Any (often empty).
+        for k in outputs:
+            sk = str(k)
+            if sk not in ordered_ids:
+                ordered_ids.append(sk)
+
+        best = ""
+        for kid in ordered_ids:
+            node_out = outputs.get(kid)
+            if node_out is None:
+                for k, v in outputs.items():
+                    if str(k) == kid:
+                        node_out = v
+                        break
+            got = _flatten(node_out) or ""
+            if got and (not best or len(got) > len(best)):
+                best = got
+                if kid == nid and len(got) > 8:
+                    return got
+        return best
 
     @staticmethod
     def prefer_output_file(

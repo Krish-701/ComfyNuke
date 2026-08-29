@@ -31,6 +31,46 @@ EVENT_API = "api"
 EVENT_LOGIN = "admin_login"
 
 
+def infer_workflow(prompt: Any = None, client_id: str = "", detail: str = "") -> str:
+    """Best-effort workflow filename from the queued graph / Nuke client_id."""
+    cid = str(client_id or "").lower()
+    det = str(detail or "").lower()
+    blob = cid + " " + det
+    if "nuke-desc" in blob or "describe" in blob:
+        return "Image_Description_v01.json"
+    if "nuke-t2i" in blob or "/t2i_" in blob or " t2i_" in blob:
+        return "Image_generation_v01.json"
+    if "nuke-i2v" in blob or "i2v" in blob:
+        return "video_minimax_h3_i2v.json"
+    if cid.startswith("nuke-") and "nuke-t2i" not in cid and "nuke-desc" not in cid:
+        return "Edit_Image_v08.json"
+    if isinstance(prompt, dict) and prompt:
+        nodes = {str(k) for k in prompt.keys()}
+        types = [
+            str((v or {}).get("class_type") or "")
+            for v in prompt.values()
+            if isinstance(v, dict)
+        ]
+        if "OllamaGenerateV2" in types or (
+            {"4", "5", "8", "12"} <= nodes and "LoadImage" in types
+        ):
+            return "Image_Description_v01.json"
+        if "73" in nodes and ("29" in nodes or "52" in nodes):
+            return "Image_generation_v01.json"
+        if "80" in nodes and "123" in nodes:
+            return "Edit_Image_v08.json"
+        if any("minimax" in t.lower() or "vhs" in t.lower() for t in types):
+            return "video_minimax_h3_i2v.json"
+        if "109" in nodes:
+            return "Edit_Image_v08.json"
+    blob = cid + " " + det
+    if "desc" in blob:
+        return "Image_Description_v01.json"
+    if "t2i" in blob:
+        return "Image_generation_v01.json"
+    return ""
+
+
 class UsageLog:
     def __init__(self, path: Path, max_lines: int = 200_000):
         self.path = Path(path)
@@ -94,6 +134,7 @@ class UsageLog:
         group: str = "",
         client_id: str = "",
         detail: str = "",
+        workflow: str = "",
     ) -> Dict[str, Any]:
         rec = self.log(
             event=EVENT_JOB_QUEUE,
@@ -107,6 +148,7 @@ class UsageLog:
             prompt_id=prompt_id,
             client_id=client_id,
             detail=detail or "queued",
+            workflow=workflow or "",
         )
         with self._lock:
             self._open_jobs[str(prompt_id)] = {
@@ -116,6 +158,7 @@ class UsageLog:
                 "label": label,
                 "group": group,
                 "client_id": client_id,
+                "workflow": workflow or "",
             }
         return rec
 
@@ -141,6 +184,7 @@ class UsageLog:
                 "label": "",
                 "group": "",
                 "client_id": "",
+                "workflow": "",
             }
         now = time.time()
         runtime = max(0.0, float(now - float(start.get("start_ts") or now)))
@@ -158,6 +202,7 @@ class UsageLog:
             runtime_sec=round(runtime, 2),
             duration_ms=int(runtime * 1000),
             detail=detail or status,
+            workflow=start.get("workflow") or "",
         )
 
     def iter_records(
@@ -169,6 +214,7 @@ class UsageLog:
         label: str = "",
         group: str = "",
         event: str = "",
+        workflow: str = "",
         q: str = "",
         limit: int = 500,
         reverse: bool = True,
@@ -177,6 +223,7 @@ class UsageLog:
         label = (label or "").strip().lower()
         group = (group or "").strip().lower()
         event = (event or "").strip()
+        workflow = (workflow or "").strip()
         q = (q or "").strip().lower()
         limit = max(1, min(int(limit or 500), 50_000))
 
@@ -213,6 +260,8 @@ class UsageLog:
                 continue
             if event and str(rec.get("event") or "") != event:
                 continue
+            if workflow and str(rec.get("workflow") or "") != workflow:
+                continue
             if q:
                 blob = " ".join(
                     str(rec.get(k) or "")
@@ -227,6 +276,7 @@ class UsageLog:
                         "client_id",
                         "detail",
                         "machine_id",
+                        "workflow",
                     )
                 ).lower()
                 if q not in blob:
@@ -264,6 +314,14 @@ class UsageLog:
             )
 
         for r in rows:
+            if not r.get("workflow"):
+                guessed = infer_workflow(
+                    None,
+                    client_id=str(r.get("client_id") or ""),
+                    detail=str(r.get("detail") or ""),
+                )
+                if guessed:
+                    r["workflow"] = guessed
             totals["events"] += 1
             ev = str(r.get("event") or "")
             k = key_for(r)
@@ -346,7 +404,68 @@ class UsageLog:
             key=lambda x: (-float(x.get("total_runtime_sec") or 0), -int(x.get("jobs_done") or 0))
         )
         totals["total_runtime_sec"] = round(float(totals["total_runtime_sec"]), 2)
-        return {"totals": totals, "users": users, "count_users": len(users)}
+
+        by_wf: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            ev = str(r.get("event") or "")
+            wf = str(r.get("workflow") or "").strip() or "(unknown)"
+            w = by_wf.setdefault(
+                wf,
+                {
+                    "workflow": wf,
+                    "jobs_queued": 0,
+                    "jobs_done": 0,
+                    "jobs_error": 0,
+                    "total_runtime_sec": 0.0,
+                    "avg_runtime_sec": 0.0,
+                    "people": 0,
+                },
+            )
+            if ev == EVENT_JOB_QUEUE:
+                w["jobs_queued"] += 1
+            elif ev == EVENT_JOB_DONE:
+                w["jobs_done"] += 1
+                w["total_runtime_sec"] += float(r.get("runtime_sec") or 0)
+            elif ev == EVENT_JOB_ERROR:
+                w["jobs_error"] += 1
+        people_by_wf: Dict[str, set] = defaultdict(set)
+        for r in rows:
+            ev = str(r.get("event") or "")
+            if ev not in (EVENT_JOB_QUEUE, EVENT_JOB_DONE, EVENT_JOB_ERROR):
+                continue
+            wf = str(r.get("workflow") or "").strip() or "(unknown)"
+            who = (
+                str(r.get("machine_id") or "")
+                or str(r.get("ip") or "")
+                or str(r.get("label") or "")
+            )
+            if who:
+                people_by_wf[wf].add(who)
+        workflows = []
+        for wf, w in by_wf.items():
+            done = int(w["jobs_done"] or 0)
+            w["total_runtime_sec"] = round(float(w["total_runtime_sec"]), 2)
+            w["avg_runtime_sec"] = (
+                round(float(w["total_runtime_sec"]) / done, 2) if done else 0.0
+            )
+            w["people"] = len(people_by_wf.get(wf) or [])
+            workflows.append(w)
+        workflows.sort(
+            key=lambda x: (
+                -int(x.get("jobs_done") or 0),
+                -float(x.get("total_runtime_sec") or 0),
+            )
+        )
+        totals["workflows"] = len(
+            [w for w in workflows if w.get("workflow") and w.get("workflow") != "(unknown)"]
+        )
+        return {
+            "totals": totals,
+            "users": users,
+            "workflows": workflows,
+            "count_users": len(users),
+            "count_workflows": len(workflows),
+        }
 
     def to_csv(
         self,
@@ -379,6 +498,22 @@ class UsageLog:
             w.writeheader()
             for r in records:
                 w.writerow({k: r.get(k, "") for k in fieldnames})
+            return buf.getvalue()
+        if kind == "workflows":
+            fieldnames = [
+                "workflow",
+                "jobs_queued",
+                "jobs_done",
+                "jobs_error",
+                "total_runtime_sec",
+                "avg_runtime_sec",
+                "people",
+            ]
+            w = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+            w.writeheader()
+            for r in records:
+                w.writerow({k: r.get(k, "") for k in fieldnames})
+            return buf.getvalue()
         else:
             fieldnames = [
                 "id",
@@ -394,6 +529,7 @@ class UsageLog:
                 "status",
                 "prompt_id",
                 "client_id",
+                "workflow",
                 "runtime_sec",
                 "duration_ms",
                 "bytes_in",

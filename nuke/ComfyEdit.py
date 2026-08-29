@@ -100,6 +100,15 @@ IMAGE_GEN_WORKFLOW = os.path.join(REPO_ROOT, "Image_generation_v01.json").replac
     "\\", "/"
 )
 I2V_WORKFLOW = os.path.join(REPO_ROOT, "video_minimax_h3_i2v.json").replace("\\", "/")
+IMAGE_DESC_WORKFLOW = os.path.join(REPO_ROOT, "Image_Description_v01.json").replace(
+    "\\", "/"
+)
+IMAGE_DESC_PROMPT_NODE = "4"
+IMAGE_DESC_LOAD_NODE = "5"
+IMAGE_DESC_OUTPUT_NODE = "12"
+IMAGE_DESC_DEFAULT_PROMPT = (
+    "Describe the full image, then provide a concise edit prompt to remove the ( )"
+)
 _raw_server = str(
     _STUDIO.get("server") or "http://192.168.91.13:8600/comfyui"
 ).rstrip("/")
@@ -538,6 +547,102 @@ def _walk_upstream(node, max_depth=40):
                 stack.append((up, depth + 1))
 
 
+def _is_viewer_node(node):
+    try:
+        cls = str(node.Class() or "")
+    except Exception:
+        return False
+    return cls == "Viewer" or cls.startswith("Viewer")
+
+
+def _is_non_image_write_node(node):
+    """Nodes Nuke Write cannot take as a plate source."""
+    if node is None:
+        return True
+    try:
+        cls = str(node.Class() or "")
+    except Exception:
+        return True
+    if _is_viewer_node(node):
+        return True
+    return cls in (
+        "Write",
+        "WriteGeo",
+        "WriteTank",
+        "BackdropNode",
+        "StickyNote",
+        "Dot",
+        "NoOp",
+    )
+
+
+def _viewer_connected_input(node):
+    """The image the Viewer is actually showing (not the Viewer node itself)."""
+    if node is None:
+        return None
+    idx = 0
+    try:
+        av = nuke.activeViewer()
+        if av is not None:
+            try:
+                vn = av.node()
+            except Exception:
+                vn = None
+            if vn is node:
+                try:
+                    idx = int(av.activeInput() or 0)
+                except Exception:
+                    idx = 0
+    except Exception:
+        pass
+    try:
+        inp = node.input(idx)
+        if inp is not None:
+            return inp
+    except Exception:
+        pass
+    try:
+        n_in = node.inputs()
+    except Exception:
+        n_in = 0
+    for i in range(n_in):
+        try:
+            inp = node.input(i)
+        except Exception:
+            inp = None
+        if inp is not None:
+            return inp
+    return None
+
+
+def resolve_export_node(node):
+    """
+    Never Write from Viewer / Write / StickyNote.
+    If the artist selected Viewer1, use the node connected to that viewer.
+    """
+    n = node
+    for _ in range(12):
+        if n is None:
+            return None
+        if _is_viewer_node(n):
+            nxt = _viewer_connected_input(n)
+            if nxt is None:
+                return n
+            n = nxt
+            continue
+        if _is_non_image_write_node(n):
+            try:
+                nxt = n.input(0)
+            except Exception:
+                nxt = None
+            if nxt is None:
+                return n
+            n = nxt
+            continue
+        return n
+    return n
+
+
 def find_upstream_read(node):
     for n in _walk_upstream(node):
         try:
@@ -934,14 +1039,33 @@ def _expand_bbox(box, pad, width, height):
     )
 
 
-def _find_roto_node(node):
+def _find_roto_and_paint(node):
+    """
+    Split mask Roto vs paint RotoPaint.
+
+    Roto  → region mask for Comfy
+    RotoPaint → RGB paint that must be baked into the plate
+    """
+    roto = None
+    paint = None
     for n in _walk_upstream(node):
         try:
-            if n.Class() in ("Roto", "RotoPaint"):
-                return n
+            cls = n.Class()
         except Exception:
             continue
-    return None
+        if cls == "Roto" and roto is None:
+            roto = n
+        elif cls == "RotoPaint" and paint is None:
+            paint = n
+        if roto is not None and paint is not None:
+            break
+    return roto, paint
+
+
+def _find_roto_node(node):
+    """Mask node: prefer a real Roto; else RotoPaint if that is all they drew."""
+    roto, paint = _find_roto_and_paint(node)
+    return roto if roto is not None else paint
 
 
 def _set_write_colorspace_srgb(write_node):
@@ -975,6 +1099,12 @@ def _make_write_node(source_node):
     Create a temporary Write. Returns (write_node, prev_selection_NAMES).
     Never store Python attrs on Nuke nodes; never hold Node refs for restore.
     """
+    source_node = resolve_export_node(source_node) or source_node
+    if source_node is None or _is_viewer_node(source_node):
+        raise RuntimeError(
+            "Write needs an image node, not Viewer.\n"
+            "Select RotoPaint1 / Roto1 / Read in the Node Graph (or view that node)."
+        )
     prev_names = []
     try:
         prev_names = [n.name() for n in nuke.selectedNodes()]
@@ -1714,15 +1844,36 @@ def _build_rgba_full_rgb_masked_alpha_fast(plate_path, mask_box, out_path, feath
     return out_path
 
 
-def prepare_display_plate(read_node, plate_path, frame, fallback_node=None):
+def prepare_display_plate(
+    read_node, plate_path, frame, fallback_node=None, force_tree_write=False
+):
     """
     Produce TEMP_PLATE_SRGB (PNG RGB), overwrite each run.
 
     - JPG/PNG/etc on disk: load with Qt (ignore Read colorspace 'linear' label)
     - EXR / unloadable / no path: Nuke Write from Read or fallback (Roto)
+    - force_tree_write: always Nuke-Write the selected tree (includes RotoPaint)
     """
     _ensure_temp_dir()
     cs = _read_colorspace(read_node)
+    src_for_write = fallback_node or read_node
+
+    if force_tree_write:
+        if src_for_write is None:
+            raise RuntimeError(
+                "Cannot bake RotoPaint: select the last node (RotoPaint / Roto / Merge)."
+            )
+        _log(
+            "Write plate via Nuke from '%s' (bake tree / RotoPaint)"
+            % src_for_write.name()
+        )
+        path, cs_set = write_plate_srgb_png(src_for_write, frame, TEMP_PLATE_SRGB)
+        _log(
+            "plate_srgb.png ready (%s bytes, write_cs=%s, baked tree)"
+            % (os.path.getsize(path), cs_set)
+        )
+        return path, "nuke_rotopaint"
+
     src_for_write = read_node or fallback_node
 
     # Fast path: 8-bit display files — always prefer disk load
@@ -1801,23 +1952,37 @@ def export_frame_for_comfy(node, frame, tmp_dir=None):
             except Exception:
                 pass
 
+    node = resolve_export_node(node) or node
     read = find_upstream_read(node)
     plate_src = evaluate_read_path(read) if read else None
-    roto = _find_roto_node(node)
-    source = roto if roto is not None else node
+    roto, paint = _find_roto_and_paint(node)
+    # Bake RGB from a real image node (never Viewer). Paint lives in the tree.
+    if paint is not None:
+        source = resolve_export_node(node) or paint
+        if _is_non_image_write_node(source):
+            source = paint
+    else:
+        source = roto if roto is not None else node
+        source = resolve_export_node(source) or source
 
     _log(
-        "Export: source=%s read=%s plate=%s"
+        "Export: source=%s read=%s plate=%s roto=%s paint=%s"
         % (
             source.name(),
             read.name() if read else "None",
             os.path.basename(plate_src) if plate_src else "None",
+            roto.name() if roto else "None",
+            paint.name() if paint else "None",
         )
     )
 
     # --- 1) RGB plate (must succeed before Comfy) ---
     plate_png, plate_method = prepare_display_plate(
-        read, plate_src, frame, fallback_node=source
+        read,
+        plate_src,
+        frame,
+        fallback_node=source,
+        force_tree_write=paint is not None,
     )
 
     QtGui, _ = _qt_gui()
@@ -1837,6 +2002,8 @@ def export_frame_for_comfy(node, frame, tmp_dir=None):
         selected_is_read = node.Class() == "Read"
     except Exception:
         selected_is_read = False
+    # Paint-only (no Roto): bake paint, send full-frame.
+    # Roto present: use Roto as mask; plate already includes RotoPaint if any.
     full_frame_mode = roto is None or selected_is_read
 
     mask_node = roto if roto is not None else node
@@ -1846,7 +2013,10 @@ def export_frame_for_comfy(node, frame, tmp_dir=None):
 
     # --- 2a) FULL FRAME: Read only / no Roto → whole image alpha = 255 ---
     if full_frame_mode:
-        _log("No Roto — FULL FRAME edit (alpha solid white on whole image)")
+        _log(
+            "No Roto — FULL FRAME edit (alpha solid white)%s"
+            % (" + baked RotoPaint" if paint is not None else "")
+        )
         _build_rgba_full_frame_alpha(plate_png, TEMP_INPUT_RGBA)
         # v08: separate mask LoadImage needs mask_luma.png (solid white)
         _write_mask_luma_solid(plate_png, TEMP_MASK_LUMA, 255)
@@ -1982,7 +2152,7 @@ def export_frame_for_comfy(node, frame, tmp_dir=None):
     if method is None:
         raise RuntimeError(
             "Could not build export image.\n"
-            "Select Roto1 (with shape) or Read1 (full-frame edit)."
+            "Select Roto1 (with shape), RotoPaint, or Read1 (full-frame edit)."
         )
 
     # --- 4) QC ---
@@ -2086,6 +2256,58 @@ def _finish_job_ok(result, source_name, frame_i):
         pass
 
 
+def _wrap_sticky_label(text, words_per_line=10):
+    """Wrap prompt text so each line has about words_per_line words."""
+    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return ""
+    paragraphs = text.split("\n")
+    out_lines = []
+    for para in paragraphs:
+        words = para.split()
+        if not words:
+            out_lines.append("")
+            continue
+        for i in range(0, len(words), int(words_per_line)):
+            out_lines.append(" ".join(words[i : i + int(words_per_line)]))
+    return "\n".join(out_lines).strip()
+
+
+def _finish_job_sticky(text, st):
+    """Main-thread: put LLM output on a StickyNote label next to the source."""
+    global _BG_JOB_ACTIVE, _POLL_STATE
+    _BG_JOB_ACTIVE = False
+    _POLL_STATE = None
+    text = _wrap_sticky_label(str(text or "").strip(), words_per_line=10)
+    _log("Describe result (%s chars, wrapped 10 words/line)" % len(text))
+    src = None
+    source_name = (st or {}).get("node_name") or ""
+    try:
+        if source_name:
+            src = nuke.toNode(source_name)
+    except Exception:
+        src = None
+    note = nuke.createNode("StickyNote", inpanel=False)
+    note["label"].setValue(text)
+    try:
+        note["note_font_size"].setValue(20)
+    except Exception:
+        pass
+    try:
+        if src is not None:
+            note.setXYpos(int(src.xpos()) + 160, int(src.ypos()))
+    except Exception:
+        pass
+    try:
+        note.setName("ComfyDescribe")
+    except Exception:
+        pass
+    try:
+        nuke.message("Image description done.\n\nStickyNote: %s" % note.name())
+    except Exception:
+        pass
+
+
 def _finish_job_err(err_msg):
     global _BG_JOB_ACTIVE, _POLL_STATE
     _BG_JOB_ACTIVE = False
@@ -2153,6 +2375,22 @@ def _poll_comfy_tick():
 
     if not entry.get("outputs") and status.get("completed") is not True:
         _schedule_ms(2000, _poll_comfy_tick)
+        return
+
+    if st.get("mode") == "describe":
+        try:
+            text_node = str(st.get("text_node") or IMAGE_DESC_OUTPUT_NODE)
+            text = client.extract_text_output(entry, text_node)
+            if not text:
+                keys = list((entry.get("outputs") or {}).keys())
+                _finish_job_err(
+                    "Job finished but node %s had no text. History keys: %s"
+                    % (text_node, keys)
+                )
+                return
+            _finish_job_sticky(text, st)
+        except Exception as e:
+            _finish_job_err(str(e))
         return
 
     # Done — download on main thread (prefer this job's stamp + video/EXR/PNG)
@@ -2241,7 +2479,8 @@ def run_edit_on_node(
         nodes = nuke.selectedNodes()
         if not nodes:
             raise RuntimeError(
-                "Select a node first.\nRead1 -> Roto1 -> select Roto1"
+                "Select a node first.\nRead1 -> (optional RotoPaint) -> (optional Roto1)\n"
+                "Select the LAST node so paint is included."
             )
         node = nodes[0]
 
@@ -2250,6 +2489,8 @@ def run_edit_on_node(
         if n is None:
             raise RuntimeError("Node gone: %s" % node)
         node = n
+
+    node = resolve_export_node(node) or node
 
     if not prompt or not str(prompt).strip():
         raise RuntimeError("Prompt is empty")
@@ -2858,7 +3099,8 @@ def schedule_edit(
         nodes = nuke.selectedNodes()
         if not nodes:
             nuke.message(
-                "Select a node first.\n\nRead1 -> Roto1 (draw shape) -> SELECT Roto1"
+                "Select a node first.\n\n"
+                "Read1 -> RotoPaint (paint) and/or Roto1 (shape) -> SELECT the last node"
             )
             return
         node = nodes[0]
@@ -2953,6 +3195,8 @@ def show_panel(initial_prompt=None):
                 "",
                 "<b>Roto1</b> = edit masked region only "
                 "(plate → LoadImage 80, mask_luma → LoadImage 123).<br>"
+                "<b>RotoPaint</b> strokes are baked into the plate (with or without Roto).<br>"
+                "Select the <b>last node</b> in the tree.<br>"
                 "<b>Read1 only</b> (no Roto) = full-frame edit.<br>"
                 "Edit prompt before OK. "
                 "Library: Pix-Edit → Prompt Examples… (copy/paste).",
@@ -3585,9 +3829,10 @@ def export_frame_for_i2v(node, frame):
     import shutil
 
     _ensure_temp_dir()
+    node = resolve_export_node(node) or node
     read = find_upstream_read(node)
     plate_src = evaluate_read_path(read) if read else None
-    # Prefer writing from selected node (Merge/Roto result), else Read
+    # Prefer writing from selected node (Merge/Roto/RotoPaint), never Viewer
     source = node
     _log(
         "I2V export frame %s from %s (read=%s)"
@@ -3597,8 +3842,18 @@ def export_frame_for_i2v(node, frame):
             read.name() if read else "None",
         )
     )
+    _, paint = _find_roto_and_paint(source)
+    force_tree = paint is not None
+    try:
+        force_tree = force_tree or (source.Class() != "Read")
+    except Exception:
+        pass
     plate_png, method = prepare_display_plate(
-        read, plate_src, frame, fallback_node=source
+        read,
+        plate_src,
+        frame,
+        fallback_node=source,
+        force_tree_write=force_tree,
     )
     # Always land on fixed i2v path (overwrite)
     if os.path.abspath(plate_png) != os.path.abspath(TEMP_I2V_FRAME):
@@ -3838,6 +4093,190 @@ def show_image_to_video_panel():
     )
 
 
+def schedule_image_description(
+    node=None,
+    prompt=None,
+    server=DEFAULT_SERVER,
+    workflow=IMAGE_DESC_WORKFLOW,
+    frame=None,
+):
+    """
+    Image → LLM prompt (Image_Description_v01.json).
+    User text → node 4. Plate → LoadImage 5. PreviewAny 12 → StickyNote label.
+    """
+    global _BG_JOB_ACTIVE, _POLL_STATE
+
+    if nuke is None:
+        raise RuntimeError("Must run inside Nuke")
+
+    ComfyClient, ComfyError = _get_client()
+
+    if node is None:
+        nodes = nuke.selectedNodes()
+        if not nodes:
+            nuke.message("Select a node first (Read, Merge, RotoPaint, or Roto).")
+            return
+        node = nodes[0]
+    if isinstance(node, str):
+        n = nuke.toNode(node)
+        if n is None:
+            nuke.message("Node gone: %s" % node)
+            return
+        node = n
+
+    prompt_s = str(prompt or "").strip()
+    if not prompt_s:
+        nuke.message("Prompt is empty")
+        return
+
+    if _BG_JOB_ACTIVE or ComfyClient.is_busy() or _POLL_STATE is not None:
+        nuke.message(
+            "A Comfy job is already running in this Nuke session. Wait for it."
+        )
+        return
+
+    wf_path = workflow or IMAGE_DESC_WORKFLOW
+    server = resolve_server_for_workflow(wf_path, fallback=server or DEFAULT_SERVER)
+    try:
+        wf_path = _refresh_workflow_from_server(wf_path)
+    except Exception as e:
+        if not os.path.isfile(wf_path):
+            nuke.message("Workflow not found / cannot refresh:\n%s\n%s" % (wf_path, e))
+            return
+        _log("Describe — workflow refresh failed, trying local: %s" % e)
+    if not os.path.isfile(wf_path):
+        nuke.message("Workflow not found:\n%s" % wf_path)
+        return
+    if frame is None:
+        frame = int(nuke.frame())
+
+    _BG_JOB_ACTIVE = True
+    try:
+        import time as _time
+        import socket as _socket
+
+        _log("Describe — export frame %s from %s" % (frame, node.name()))
+        in_path, method = export_frame_for_i2v(node, frame)
+        host = _socket.gethostname().replace(" ", "_")
+        stamp = "desc_%s_%s" % (
+            _time.strftime("%Y%m%d_%H%M%S"),
+            uuid.uuid4().hex[:8],
+        )
+        client = ComfyClient(
+            server=server,
+            workflow_path=wf_path,
+            timeout_sec=300.0,
+            poll_interval_sec=2.0,
+            client_id="nuke-desc-%s-%s" % (host, stamp),
+        )
+        _log("Describe — load workflow %s" % wf_path)
+        client.load_workflow()
+        client.id_prompt = IMAGE_DESC_PROMPT_NODE
+        client.id_prompt_key = "value"
+        client.id_load = IMAGE_DESC_LOAD_NODE
+        client.id_load_mask = None
+
+        remote = client.upload_image(in_path, remote_name="%s.png" % stamp)
+        _log("Uploaded plate %s (%s)" % (remote, method))
+        wf = client.build_prompt(
+            image_name=remote,
+            prompt=prompt_s,
+            seed=None,
+            filename_prefix="nuke/%s/%s" % (host, stamp),
+            require_save=False,
+        )
+        if IMAGE_DESC_PROMPT_NODE in wf:
+            wf[IMAGE_DESC_PROMPT_NODE].setdefault("inputs", {})["value"] = prompt_s
+        if IMAGE_DESC_LOAD_NODE in wf:
+            wf[IMAGE_DESC_LOAD_NODE].setdefault("inputs", {})["image"] = remote
+        text_node = str(
+            getattr(client, "id_text_out", "") or IMAGE_DESC_OUTPUT_NODE
+        )
+        if IMAGE_DESC_OUTPUT_NODE in wf:
+            text_node = IMAGE_DESC_OUTPUT_NODE
+            client.id_text_out = IMAGE_DESC_OUTPUT_NODE
+        _log("Prompt text → node %s: %s" % (IMAGE_DESC_PROMPT_NODE, prompt_s[:120]))
+        _log("LoadImage node %s / text capture node %s" % (IMAGE_DESC_LOAD_NODE, text_node))
+        _log("Queueing image-description job…")
+        prompt_id = client.queue_prompt(wf)
+        _log("prompt_id=%s" % prompt_id)
+    except Exception as e:
+        _BG_JOB_ACTIVE = False
+        _log("ERROR: %s" % e)
+        try:
+            nuke.message("ComfyUI Image Description error:\n%s" % e)
+        except Exception:
+            pass
+        return
+
+    import time as _time
+
+    _POLL_STATE = {
+        "client": client,
+        "prompt_id": prompt_id,
+        "t0": _time.time(),
+        "timeout": 300.0,
+        "out_dir": DEFAULT_OUT,
+        "node_name": node.name(),
+        "frame": frame,
+        "stamp": stamp,
+        "mode": "describe",
+        "text_node": text_node,
+        "method": "describe",
+    }
+    _log("Describe queued — keep working. Result will land on a StickyNote.")
+    _schedule_ms(2000, _poll_comfy_tick)
+
+
+def show_image_description_panel():
+    if nuke is None:
+        raise RuntimeError("Must run inside Nuke")
+
+    import nukescripts  # type: ignore
+
+    sel = nuke.selectedNodes()
+    node = sel[0] if sel else None
+    if node is None:
+        nuke.message("Select a node first (Read, Merge, or Roto).")
+        return
+    frame = int(nuke.frame())
+
+    class ImageDescPanel(nukescripts.PythonPanel):
+        def __init__(self):
+            nukescripts.PythonPanel.__init__(self, "ComfyUI Image Description")
+            self.server = nuke.String_Knob("server", "Server")
+            self.workflow = nuke.File_Knob("workflow", "Workflow")
+            self.workflow.setValue(IMAGE_DESC_WORKFLOW)
+            self.server.setValue(
+                resolve_server_for_workflow(
+                    IMAGE_DESC_WORKFLOW, fallback=DEFAULT_SERVER
+                )
+            )
+            self.prompt = nuke.Multiline_Eval_String_Knob("prompt", "Prompt")
+            self.prompt.setValue(IMAGE_DESC_DEFAULT_PROMPT)
+            self.help_txt = nuke.Text_Knob(
+                "help_txt",
+                "",
+                "Selected frame → LoadImage <b>5</b>.<br>"
+                "Your text → node <b>4</b>. Preview as Text node <b>12</b> "
+                "is written into a StickyNote <b>label</b> (10 words/line).",
+            )
+            for k in (self.server, self.workflow, self.prompt, self.help_txt):
+                self.addKnob(k)
+
+    p = ImageDescPanel()
+    if not p.showModalDialog():
+        _log("Image Description cancelled")
+        return
+    schedule_image_description(
+        node=node,
+        prompt=p.prompt.value(),
+        server=p.server.value().strip(),
+        workflow=p.workflow.value(),
+        frame=frame,
+    )
+
+
 def register_menu():
     if nuke is None:
         return
@@ -3851,12 +4290,13 @@ def register_menu():
     m = menubar.addMenu(MENU_NAME)
     m.addCommand("Edit Image...", show_panel)
     m.addCommand("Image Gen...", show_image_gen_panel)
+    m.addCommand("Image Description...", show_image_description_panel)
     m.addCommand("Image to Video...", show_image_to_video_panel)
     m.addCommand("Ping Server", ping_server)
     m.addCommand("Prompt Examples...", show_prompt_examples_panel)
 
     nuke.tprint(
-        "[Pix-Edit] Menu OK — Edit Image / Prompt Examples / Gen / I2V / Ping | "
+        "[Pix-Edit] Menu OK — Edit Image / Gen / Describe / I2V / Ping | "
         "server=%s root=%s workflow=%s"
         % (DEFAULT_SERVER, REPO_ROOT, os.path.basename(DEFAULT_WORKFLOW))
     )

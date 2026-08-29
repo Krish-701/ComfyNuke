@@ -21,7 +21,7 @@
       margin: 0; font-family: "Segoe UI", system-ui, sans-serif;
       background: var(--bg); color: var(--text); min-height: 100vh;
     }
-    .wrap { max-width: 1040px; margin: 0 auto; padding: 28px 18px 60px; }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 18px 60px; }
     h1 { font-size: 1.45rem; margin: 0 0 6px; }
     h2 { font-size: 1.1rem; margin: 0 0 12px; }
     .sub { color: var(--muted); margin-bottom: 22px; font-size: 0.95rem; }
@@ -294,6 +294,28 @@
           </div>
           <div id="wfaclMsg"></div>
         </div>
+        <div class="card">
+          <h2>Group workflow access</h2>
+          <p class="hint">
+            Select <b>one workflow</b> and a <b>group</b>, then enable or block it for every machine in that group.
+            Block keeps other workflows available. Enable adds the file back (and removes a block).
+          </p>
+          <div class="row">
+            <div style="flex:2 1 240px">
+              <label>Workflow</label>
+              <select id="gwfFile"></select>
+            </div>
+            <div style="flex:2 1 200px">
+              <label>Group</label>
+              <select id="gwfGroup"></select>
+            </div>
+          </div>
+          <div class="row tight">
+            <button id="btnGwfEnable" type="button">Enable for group</button>
+            <button id="btnGwfBlock" class="danger" type="button">Block for group</button>
+          </div>
+          <div id="gwfMsg"></div>
+        </div>
       </div>
 
       <div id="tabRoutes" class="hidden">
@@ -383,9 +405,12 @@
 
       <div id="tabLogs" class="hidden">
         <div class="card">
-          <h2>Usage summary (per machine / user)</h2>
+          <h2>Usage summary</h2>
           <div class="stat-grid" id="logStats"></div>
           <div class="toolbar">
+            <button id="btnRangeDaily" class="secondary" type="button">Daily</button>
+            <button id="btnRange24h" class="secondary" type="button">Last 24 hours</button>
+            <button id="btnRange30d" class="secondary" type="button">Last 30 days</button>
             <div>
               <label>From</label>
               <input id="logFrom" type="text" placeholder="2026-08-01" style="margin:0" />
@@ -414,9 +439,30 @@
             </div>
             <button id="btnLogRefresh" type="button">Refresh</button>
             <button id="btnCsvEvents" class="secondary" type="button">Export events CSV</button>
-            <button id="btnCsvSummary" class="secondary" type="button">Export summary CSV</button>
+            <button id="btnCsvSummary" class="secondary" type="button">Export people CSV</button>
+            <button id="btnCsvWorkflows" class="secondary" type="button">Export workflows CSV</button>
           </div>
           <div id="logMsg"></div>
+          <h2 style="margin-top:16px">Workflows — runs and duration</h2>
+          <p class="hint">How many times each workflow ran in this range, total GPU/time, and how many people used it.</p>
+          <div class="log-table-wrap" style="margin-top:10px">
+            <table>
+              <thead>
+                <tr>
+                  <th>Workflow</th>
+                  <th>Queued</th>
+                  <th>Done</th>
+                  <th>Errors</th>
+                  <th>Total duration</th>
+                  <th>Avg duration</th>
+                  <th>People</th>
+                </tr>
+              </thead>
+              <tbody id="wfSummaryBody"></tbody>
+            </table>
+          </div>
+          <h2 style="margin-top:18px">People — runs and time</h2>
+          <p class="hint">Every machine/user in the range: job counts and total duration.</p>
           <div class="log-table-wrap" style="margin-top:10px">
             <table>
               <thead>
@@ -454,6 +500,7 @@
                   <th>Group</th>
                   <th>IP</th>
                   <th>Machine ID</th>
+                  <th>Workflow</th>
                   <th>Path</th>
                   <th>Status</th>
                   <th>Runtime</th>
@@ -1245,13 +1292,53 @@
     function knownWorkflowFiles() {
       const fromRoutes = (typeof ROUTES !== "undefined" && ROUTES.workflows)
         ? ROUTES.workflows.map((w) => w.file) : [];
-      const extra = ["Edit_Image_v08.json", "Image_generation_v01.json", "video_minimax_h3_i2v.json"];
+      const extra = ["Edit_Image_v08.json", "Image_generation_v01.json", "Image_Description_v01.json", "video_minimax_h3_i2v.json"];
       return Array.from(new Set(fromRoutes.concat(extra).concat(typeof DISCOVERED !== "undefined" ? DISCOVERED : []))).filter(Boolean);
     }
 
     function selectedAclMachine() {
       const ip = $("wfaclIp").value;
       return (STATE.ips || []).find((e) => e.ip === ip) || null;
+    }
+
+    function fillGroupWorkflowSelects() {
+      const files = knownWorkflowFiles();
+      const curF = $("gwfFile").value;
+      $("gwfFile").innerHTML = files.map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join("")
+        || `<option value="">No workflows</option>`;
+      if (curF && files.indexOf(curF) >= 0) $("gwfFile").value = curF;
+      const names = [];
+      (STATE.groups || []).forEach((g) => { if (g && names.indexOf(g) < 0) names.push(g); });
+      (STATE.ips || []).forEach((e) => {
+        const g = e.group || STATE.ungrouped_name || "Ungrouped";
+        if (names.indexOf(g) < 0) names.push(g);
+      });
+      const curG = $("gwfGroup").value;
+      $("gwfGroup").innerHTML = names.map((g) => `<option value="${esc(g)}">${esc(g)}</option>`).join("");
+      if (curG && names.indexOf(curG) >= 0) $("gwfGroup").value = curG;
+    }
+
+    async function groupWorkflowAction(action) {
+      const file = $("gwfFile").value;
+      const group = $("gwfGroup").value;
+      if (!file || !group) {
+        showMsg($("gwfMsg"), "Pick a workflow and a group", false);
+        return;
+      }
+      try {
+        const out = await api("/admin/api/set_group_workflow", {
+          method: "POST",
+          body: JSON.stringify({ file, group, action }),
+        });
+        showMsg($("gwfMsg"),
+          (action === "block" ? "Blocked" : "Enabled") + " " + file + " for group " + group
+          + " (" + (out.updated || 0) + " machine(s))",
+          true);
+        await refresh(false);
+        renderWfacl();
+      } catch (e) {
+        showMsg($("gwfMsg"), e.message, false);
+      }
     }
 
     function renderWfacl() {
@@ -1285,6 +1372,7 @@
       $("wfaclBody").querySelectorAll(".btn-wfacl-rm").forEach((b) => {
         b.onclick = () => wfaclRemove(b.dataset.file);
       });
+      fillGroupWorkflowSelects();
     }
 
     async function wfaclSetMode(mode) {
@@ -1349,6 +1437,8 @@
       }
     });
     $("btnWfaclAdd").onclick = wfaclAdd;
+    $("btnGwfEnable").onclick = () => groupWorkflowAction("enable");
+    $("btnGwfBlock").onclick = () => groupWorkflowAction("block");
 
     async function loadUsers() {
       if (!can("users.manage")) return;
@@ -1468,12 +1558,31 @@
       return h + "h " + (m % 60) + "m";
     }
 
+    let LOG_RANGE = "";
+
+    function setLogRange(kind) {
+      LOG_RANGE = kind;
+      $("logFrom").value = "";
+      $("logTo").value = "";
+      ["btnRangeDaily", "btnRange24h", "btnRange30d"].forEach((id) => {
+        const b = $(id);
+        if (!b) return;
+        b.classList.toggle("secondary", true);
+      });
+      const map = { today: "btnRangeDaily", "24h": "btnRange24h", "30d": "btnRange30d" };
+      const active = $(map[kind] || "");
+      if (active) active.classList.remove("secondary");
+      loadLogs();
+    }
+
     function logQuery() {
       const p = new URLSearchParams();
       const from = ($("logFrom").value || "").trim();
       const to = ($("logTo").value || "").trim();
       const ev = $("logEvent").value;
       const q = ($("logQ").value || "").trim();
+      if (from || to) LOG_RANGE = "";
+      if (LOG_RANGE) p.set("range", LOG_RANGE);
       if (from) p.set("from", from);
       if (to) p.set("to", to);
       if (ev) p.set("event", ev);
@@ -1501,6 +1610,17 @@
           ["Users / machines", summ.count_users || 0],
         ].map(([title, n]) => `<div class="stat"><div class="n">${esc(n)}</div><div class="t">${esc(title)}</div></div>`).join("");
 
+        const wb = $("wfSummaryBody");
+        wb.innerHTML = (summ.workflows || []).map((w) => `<tr>
+          <td class="mono">${esc(w.workflow || "—")}</td>
+          <td>${esc(w.jobs_queued || 0)}</td>
+          <td>${esc(w.jobs_done || 0)}</td>
+          <td>${esc(w.jobs_error || 0)}</td>
+          <td>${esc(fmtSec(w.total_runtime_sec))}</td>
+          <td>${esc(fmtSec(w.avg_runtime_sec))}</td>
+          <td>${esc(w.people || 0)}</td>
+        </tr>`).join("") || `<tr><td colspan="7" class="hint">No workflow jobs in this range</td></tr>`;
+
         const sb = $("summaryBody");
         sb.innerHTML = (summ.users || []).map((u) => `<tr>
           <td class="mono">${esc(u.machine_id || "—")}</td>
@@ -1526,6 +1646,7 @@
           <td>${esc(r.group || "—")}</td>
           <td class="mono">${esc(r.ip || "")}</td>
           <td class="mono">${esc(r.machine_id || "—")}</td>
+          <td class="mono">${esc(r.workflow || "—")}</td>
           <td class="mono">${esc((r.method || "") + " " + (r.path || ""))}</td>
           <td>${esc(r.status ?? "")}</td>
           <td>${r.runtime_sec != null ? esc(fmtSec(r.runtime_sec)) : (r.duration_ms != null ? esc(r.duration_ms + "ms") : "—")}</td>
@@ -1539,11 +1660,17 @@
     }
 
     $("btnLogRefresh").onclick = () => loadLogs();
+    $("btnRangeDaily").onclick = () => setLogRange("today");
+    $("btnRange24h").onclick = () => setLogRange("24h");
+    $("btnRange30d").onclick = () => setLogRange("30d");
     $("btnCsvEvents").onclick = () => {
       window.location.href = "/admin/api/logs/export.csv?" + logQuery();
     };
     $("btnCsvSummary").onclick = () => {
       window.location.href = "/admin/api/logs/export_summary.csv?" + logQuery();
+    };
+    $("btnCsvWorkflows").onclick = () => {
+      window.location.href = "/admin/api/logs/export_workflows.csv?" + logQuery();
     };
 
     // Portal label from URL (/admin vs /operator)

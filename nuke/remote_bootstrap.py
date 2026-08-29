@@ -8,7 +8,7 @@ Artists do NOT need share/SSH access. They only need:
 
 ONE LINE in Nuke Script Editor:
 
-  exec(__import__('urllib.request').request.urlopen('http://192.168.91.13:8600/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
+  exec(__import__('urllib.request').request.urlopen('http://192.168.91.11:8600/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
 
 On every launch this script:
   1) Asks the code server for /manifest.json (latest package version)
@@ -34,7 +34,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Defaults (override by editing on server, or set env before exec)
 # ---------------------------------------------------------------------------
-CODE_BASE = (os.environ.get("COMFYNUKE_CODE_BASE") or "http://192.168.91.13:8600").rstrip(
+CODE_BASE = (os.environ.get("COMFYNUKE_CODE_BASE") or "http://192.168.91.11:8600").rstrip(
     "/"
 )
 # ComfyUI jobs MUST go through the :8600 /comfyui proxy so Access Control
@@ -55,6 +55,7 @@ _SYNC_FILES = (
     "client/comfy_client.py",
     "Edit_Image_v08.json",
     "Image_generation_v01.json",
+    "Image_Description_v01.json",
     "video_minimax_h3_i2v.json",
     "studio_config.json",  # optional
     "studio_config.example.json",
@@ -70,6 +71,7 @@ _ALWAYS_REFRESH = frozenset(
         "client/comfy_client.py",
         "Edit_Image_v08.json",
         "Image_generation_v01.json",
+        "Image_Description_v01.json",
         "video_minimax_h3_i2v.json",
         "workflow_routes.json",
         "studio_config.json",
@@ -238,6 +240,7 @@ def _sync_from_server(base_url, cache, server_manifest, force_all=False):
         always = rel in _ALWAYS_REFRESH or rel.lower().endswith(".json") and (
             "Edit_Image" in rel
             or "Image_generation" in rel
+            or "image_description" in rel.lower()
             or "video_" in rel
             or rel.endswith("_i2v.json")
         )
@@ -408,9 +411,10 @@ def bootstrap():
     _log("  workflows (from server when outdated):")
     _log("    edit:  %s" % getattr(ComfyEdit, "DEFAULT_WORKFLOW", ""))
     _log("    gen:   %s" % getattr(ComfyEdit, "IMAGE_GEN_WORKFLOW", ""))
+    _log("    desc:  %s" % getattr(ComfyEdit, "IMAGE_DESC_WORKFLOW", ""))
     _log("    i2v:   %s" % getattr(ComfyEdit, "I2V_WORKFLOW", ""))
     _log("  Menu: Nuke > Pix-Edit")
-    _log("    Edit Image | Image Gen | Image to Video | Ping")
+    _log("    Edit Image | Image Gen | Image Description | Image to Video | Ping")
     _log("  Jobs share one ComfyUI queue on the Ubuntu GPU.")
     _log("=" * 56)
     return ComfyEdit

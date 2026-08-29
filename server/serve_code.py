@@ -54,6 +54,7 @@ from workflow_routes import (  # noqa: E402
 from usage_log import (  # noqa: E402
     UsageLog,
     classify_comfy_path,
+    infer_workflow,
     parse_history_completion,
     parse_prompt_id_from_queue_response,
     EVENT_ACCESS_DENIED,
@@ -74,6 +75,7 @@ ALLOWED_PREFIXES = (
     "Edit_Image_v06.json",
     "Edit_Image_v05.json",
     "Image_generation_v01.json",
+    "Image_Description_v01.json",
     "video_minimax_h3_i2v.json",
     "studio_config.json",
     "studio_config.example.json",
@@ -92,6 +94,7 @@ SYNC_FILES = (
     "client/comfy_client.py",
     "Edit_Image_v08.json",
     "Image_generation_v01.json",
+    "Image_Description_v01.json",
     "video_minimax_h3_i2v.json",
     "studio_config.json",
     "studio_config.example.json",
@@ -439,6 +442,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             "/admin/api/logs/summary",
             "/admin/api/logs/export.csv",
             "/admin/api/logs/export_summary.csv",
+            "/admin/api/logs/export_workflows.csv",
         ):
             need = "logs.export" if "export" in path_only else "logs.view"
             if not self._require_perm(need):
@@ -466,11 +470,32 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
 
             since = _ts("since") or _ts("from")
             until = _ts("until") or _ts("to")
-            # default until end of day if date only
+            rng = (_one("range") or "").strip().lower()
+            now = time.time()
+            if rng in ("today", "daily"):
+                loc = time.localtime(now)
+                since = time.mktime(
+                    (loc.tm_year, loc.tm_mon, loc.tm_mday, 0, 0, 0, 0, 0, -1)
+                )
+                until = now
+            elif rng in ("24h", "last24", "last_24_hour", "last_24_hours"):
+                since = now - 24 * 3600
+                until = now
+            elif rng in ("30d", "30days", "last30", "last_30_days"):
+                since = now - 30 * 24 * 3600
+                until = now
+            # date-only `to` → end of that day
+            to_raw = _one("to") or _one("until")
+            if to_raw and len(to_raw.strip()) == 10 and until is not None:
+                try:
+                    until = time.mktime(time.strptime(to_raw.strip() + " 23:59:59", "%Y-%m-%d %H:%M:%S"))
+                except Exception:
+                    pass
             ip = _one("ip")
             label = _one("label")
             group = _one("group")
             event = _one("event")
+            workflow = _one("workflow")
             q = _one("q")
             try:
                 limit = int(_one("limit", "500"))
@@ -478,7 +503,11 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 limit = 500
 
             if path_only == "/admin/api/logs/summary":
-                self._send_json(self.usage.summary(since=since, until=until))
+                payload = self.usage.summary(since=since, until=until)
+                payload["range"] = rng or "custom"
+                payload["since"] = since
+                payload["until"] = until
+                self._send_json(payload)
                 return True
 
             if path_only == "/admin/api/logs":
@@ -489,6 +518,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                     label=label,
                     group=group,
                     event=event,
+                    workflow=workflow,
                     q=q,
                     limit=limit,
                 )
@@ -503,6 +533,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                     label=label,
                     group=group,
                     event=event,
+                    workflow=workflow,
                     q=q,
                     limit=min(limit, 50_000),
                     reverse=False,
@@ -532,6 +563,22 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                         (
                             "Content-Disposition",
                             'attachment; filename="pixedit_usage_summary.csv"',
+                        )
+                    ],
+                )
+                return True
+
+            if path_only == "/admin/api/logs/export_workflows.csv":
+                summ = self.usage.summary(since=since, until=until)
+                csv_text = self.usage.to_csv(summ.get("workflows") or [], kind="workflows")
+                body = csv_text.encode("utf-8")
+                self._send_bytes(
+                    body,
+                    "text/csv; charset=utf-8",
+                    extra_headers=[
+                        (
+                            "Content-Disposition",
+                            'attachment; filename="pixedit_usage_workflows.csv"',
                         )
                     ],
                 )
@@ -616,6 +663,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             "/admin/api/set_ip_workflows": "machines.edit",
             "/admin/api/ip_workflow_add": "machines.edit",
             "/admin/api/ip_workflow_remove": "machines.edit",
+            "/admin/api/set_group_workflow": "machines.edit",
         }
 
         try:
@@ -771,6 +819,14 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 )
                 self._send_json({"ok": True, "entry": e})
                 return True
+            if path_only == "/admin/api/set_group_workflow":
+                out = self.access.set_group_workflow(
+                    group=str(data.get("group") or ""),
+                    filename=str(data.get("file") or data.get("workflow") or ""),
+                    action=str(data.get("action") or ""),
+                )
+                self._send_json({"ok": True, **out})
+                return True
         except ValueError as e:
             self._send_json({"error": str(e)}, status=400)
             return True
@@ -814,6 +870,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 pid = parse_prompt_id_from_queue_response(body_out)
                 client_id = ""
                 detail = "queued"
+                prompt = {}
                 if body_in:
                     try:
                         payload = json.loads(body_in.decode("utf-8"))
@@ -830,6 +887,11 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                     except Exception:
                         pass
                 if pid:
+                    wf_name = infer_workflow(
+                        prompt if isinstance(prompt, dict) else None,
+                        client_id=client_id,
+                        detail=detail,
+                    )
                     self.usage.track_job_start(
                         pid,
                         ip=base["ip"],
@@ -838,6 +900,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                         group=base["group"],
                         client_id=client_id,
                         detail=detail,
+                        workflow=wf_name,
                     )
                 else:
                     self.usage.log(event=EVENT_API, detail="prompt_no_id", **base)

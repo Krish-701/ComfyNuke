@@ -1,5 +1,7 @@
 # Pix-Edit / ComfyNuke — Studio operations guide
 
+**Current start / stop / control-panel playbook:** [STUDIO_PLAYBOOK.md](STUDIO_PLAYBOOK.md)
+
 How the hub works, how to **start / stop** services, and how to **add or remove workflows**.
 
 Hub machine: Ubuntu GPU box  

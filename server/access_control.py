@@ -173,6 +173,8 @@ def _normalize_entry(e: Dict[str, Any]) -> Dict[str, Any]:
         out["allowed_workflows"] = _normalize_workflows(out.get("allowed_workflows"))
     else:
         out["allowed_workflows"] = None  # all
+    denied = _normalize_workflows(out.get("denied_workflows") or [])
+    out["denied_workflows"] = denied if denied else []
     return out
 
 
@@ -383,9 +385,11 @@ class AccessControl:
                 if g not in groups and g != UNGROUPED:
                     groups.append(g)
                 wfs = e.get("allowed_workflows")
+                denied = e.get("denied_workflows") or []
                 e["workflow_mode"] = "all" if wfs is None else "list"
                 e["allowed_workflows"] = wfs if wfs is not None else []
-                e["workflow_restrict"] = wfs is not None
+                e["denied_workflows"] = list(denied)
+                e["workflow_restrict"] = wfs is not None or bool(denied)
             return {
                 "enabled": bool(self._cfg.get("enabled")),
                 "allow_localhost": bool(self._cfg.get("allow_localhost", True)),
@@ -861,6 +865,9 @@ class AccessControl:
                 except Exception:
                     continue
                 e = _normalize_entry(entry)
+                denied = e.get("denied_workflows") or []
+                if fname in denied:
+                    return False, "workflow_blocked:%s" % fname
                 allowed = e.get("allowed_workflows")
                 if allowed is None:
                     return True, "all_workflows"
@@ -893,6 +900,54 @@ class AccessControl:
             self._cfg["ips"] = ips
             self._save_unlocked()
             return e
+
+    def set_group_workflow(
+        self,
+        group: str,
+        filename: str,
+        action: str,
+    ) -> Dict[str, Any]:
+        """
+        Enable or block one workflow for every machine in a group.
+
+        enable — remove from denied; if the IP is on a list, add the file.
+        block  — add to denied (still allows all other workflows when mode=all).
+        """
+        fname = _normalize_workflow_name(filename)
+        if not fname.endswith(".json"):
+            raise ValueError("workflow must be a .json file name")
+        act = (action or "").strip().lower()
+        if act not in ("enable", "block"):
+            raise ValueError("action must be enable or block")
+        g = _normalize_group(group)
+        updated = 0
+        with self._lock:
+            ips = list(self._cfg.get("ips") or [])
+            for i, raw in enumerate(ips):
+                if not isinstance(raw, dict):
+                    continue
+                e = _normalize_entry(raw)
+                if _normalize_group(e.get("group")) != g:
+                    continue
+                denied = list(e.get("denied_workflows") or [])
+                allowed = e.get("allowed_workflows")
+                if act == "block":
+                    if fname not in denied:
+                        denied.append(fname)
+                    if isinstance(allowed, list) and fname in allowed:
+                        allowed = [x for x in allowed if x != fname]
+                        e["allowed_workflows"] = allowed
+                else:
+                    denied = [x for x in denied if x != fname]
+                    if isinstance(allowed, list) and fname not in allowed:
+                        allowed = list(allowed) + [fname]
+                        e["allowed_workflows"] = allowed
+                e["denied_workflows"] = denied
+                ips[i] = e
+                updated += 1
+            self._cfg["ips"] = ips
+            self._save_unlocked()
+        return {"group": g, "file": fname, "action": act, "updated": updated}
 
     def add_ip_workflow(self, ip: str = "", entry_id: str = "", filename: str = "") -> Dict[str, Any]:
         fname = _normalize_workflow_name(filename)

@@ -36,7 +36,9 @@ python3 server/serve_code.py --root /home/radhakrishnan/Comfyui-Setup/ComfyNuke 
 
 Firewall: allow LAN **8188** + **8600**.
 
-Full guide: [docs/MULTI_USER_UBUNTU.md](docs/MULTI_USER_UBUNTU.md)
+**How to start, stop, and use the studio:** [docs/STUDIO_PLAYBOOK.md](docs/STUDIO_PLAYBOOK.md)
+
+Also: [docs/MULTI_USER_UBUNTU.md](docs/MULTI_USER_UBUNTU.md) · [docs/STUDIO_OPERATIONS.md](docs/STUDIO_OPERATIONS.md)
 
 ## Modes
 

@@ -1,15 +1,16 @@
 # =============================================================================
 # ARTIST — paste this ONE block into Nuke Script Editor and run
 # No Samba/SSH to the server. Needs network to:
-#   http://192.168.91.13:8600  (code)
-#   http://192.168.91.13:8188  (ComfyUI)
+#   http://192.168.91.11:8600  (code)
+#   http://192.168.91.11:8188  (ComfyUI, also via :8600/comfyui)
 # =============================================================================
 
-exec(__import__('urllib.request').request.urlopen('http://192.168.91.13:8600/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
+exec(__import__('urllib.request').request.urlopen('http://192.168.91.11:8600/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
 
 # Then use menu:  Nuke > Pix-Edit
 #   Edit Image...
 #   Image Gen...
+#   Image Description...
 #   Image to Video...
 #   Ping Server
 #
