@@ -286,6 +286,34 @@ class UsageLog:
                 break
         return out
 
+    def find_by_prompt_id(self, prompt_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """Match ComfyUI prompt_id / job id (full or unique prefix)."""
+        needle = str(prompt_id or "").strip()
+        if not needle:
+            return []
+        needle_l = needle.lower()
+        rows = self.iter_records(limit=50_000, reverse=True)
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            pid = str(r.get("prompt_id") or "")
+            if not pid:
+                continue
+            pl = pid.lower()
+            if pl == needle_l or pl.startswith(needle_l) or needle_l in pl:
+                if not r.get("workflow"):
+                    guessed = infer_workflow(
+                        None,
+                        client_id=str(r.get("client_id") or ""),
+                        detail=str(r.get("detail") or ""),
+                    )
+                    if guessed:
+                        r = dict(r)
+                        r["workflow"] = guessed
+                out.append(r)
+                if len(out) >= max(1, min(int(limit or 50), 200)):
+                    break
+        return out
+
     def summary(
         self,
         *,

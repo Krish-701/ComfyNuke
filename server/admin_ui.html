@@ -138,6 +138,7 @@
     .stat .n { font-size: 1.35rem; font-weight: 700; }
     .stat .t { color: var(--muted); font-size: 0.8rem; margin-top: 4px; }
     .log-table-wrap { overflow-x: auto; max-height: 480px; overflow-y: auto; }
+    .log-table-wrap.tall { max-height: 720px; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
   </style>
 </head>
@@ -249,6 +250,11 @@
           </div>
           <button id="btnExpand" class="ghost" type="button">Expand all</button>
           <button id="btnCollapse" class="ghost" type="button">Collapse all</button>
+          <button id="btnExportMachines" class="secondary" type="button">Export users CSV</button>
+          <label class="secondary" style="display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;background:#2a3548;cursor:pointer;font-weight:600;font-size:0.85rem">
+            Import users CSV
+            <input id="importMachinesFile" type="file" accept=".csv,text/csv" style="display:none" />
+          </label>
         </div>
         <div id="machineList"></div>
       </div>
@@ -405,6 +411,21 @@
 
       <div id="tabLogs" class="hidden">
         <div class="card">
+          <h2>Find job — who ran this?</h2>
+          <p class="hint">Paste a ComfyUI <b>prompt id / job id</b> from history. We show the person, group, IP, workflow, and time.</p>
+          <div class="row">
+            <div style="flex:2 1 320px">
+              <label>ComfyUI job / prompt id</label>
+              <input id="jobId" type="text" placeholder="paste prompt_id here" style="margin:0" />
+            </div>
+            <div style="flex:0 0 auto;margin-bottom:0">
+              <button id="btnJobLookup" type="button">Find who</button>
+            </div>
+          </div>
+          <div id="jobWho"></div>
+          <div id="jobMsg"></div>
+        </div>
+        <div class="card">
           <h2>Usage summary</h2>
           <div class="stat-grid" id="logStats"></div>
           <div class="toolbar">
@@ -441,6 +462,18 @@
             <button id="btnCsvEvents" class="secondary" type="button">Export events CSV</button>
             <button id="btnCsvSummary" class="secondary" type="button">Export people CSV</button>
             <button id="btnCsvWorkflows" class="secondary" type="button">Export workflows CSV</button>
+            <div>
+              <label>People sort</label>
+              <select id="peopleSort" style="margin:0">
+                <option value="latest">Latest activity</option>
+                <option value="runtime">Most runtime</option>
+                <option value="jobs">Most jobs</option>
+              </select>
+            </div>
+            <label class="hint" style="display:flex;align-items:center;gap:8px;margin:0 0 0 4px">
+              <input id="shortNames" type="checkbox" checked />
+              Short names &amp; times
+            </label>
           </div>
           <div id="logMsg"></div>
           <h2 style="margin-top:16px">Workflows — runs and duration</h2>
@@ -462,8 +495,8 @@
             </table>
           </div>
           <h2 style="margin-top:18px">People — runs and time</h2>
-          <p class="hint">Every machine/user in the range: job counts and total duration.</p>
-          <div class="log-table-wrap" style="margin-top:10px">
+          <p class="hint">Everyone in this range. Default sort is <b>latest activity</b> (who used it most recently first).</p>
+          <div class="log-table-wrap tall" style="margin-top:10px">
             <table>
               <thead>
                 <tr>
@@ -933,6 +966,9 @@
       $("btnDisable").style.display = aclToggle ? "" : "none";
       $("btnAdd").style.display = write ? "" : "none";
       $("btnAddGroup").style.display = write ? "" : "none";
+      if ($("btnExportMachines")) $("btnExportMachines").style.display = can("machines.view") ? "" : "none";
+      const impLab = $("importMachinesFile") && $("importMachinesFile").closest("label");
+      if (impLab) impLab.style.display = write ? "" : "none";
       renderMachines();
       if (can("users.manage") && !$("tabUsers").classList.contains("hidden")) {
         loadUsers();
@@ -997,6 +1033,37 @@
         showMsg($("dashMsg"), err.message, false);
       }
     };
+    $("btnExportMachines").onclick = () => {
+      window.location.href = "/admin/api/machines/export.csv";
+    };
+    $("importMachinesFile").addEventListener("change", async (ev) => {
+      const f = ev.target.files && ev.target.files[0];
+      ev.target.value = "";
+      if (!f) return;
+      try {
+        const csv = await f.text();
+        const out = await api("/admin/api/machines/import", {
+          method: "POST",
+          body: JSON.stringify({ csv }),
+        });
+        const skip = (out.skipped || []).length;
+        const errn = (out.errors || []).length;
+        showMsg(
+          $("dashMsg"),
+          "CSV import: added " + (out.added || 0)
+            + ", updated " + (out.updated || 0)
+            + (skip ? ", skipped " + skip : "")
+            + (errn ? ", errors " + errn : ""),
+          !errn
+        );
+        if (errn) {
+          console.warn(out.errors);
+        }
+        await refresh(false);
+      } catch (err) {
+        showMsg($("dashMsg"), err.message, false);
+      }
+    });
     $("btnAddGroup").onclick = async () => {
       try {
         const name = $("newGroupOnly").value.trim();
@@ -1548,6 +1615,23 @@
       }
     };
 
+    function fmtTimeShort(iso) {
+      const s = String(iso || "").replace("T", " ").trim();
+      if (!s) return "—";
+      // 2026-08-31 14:22:03 → 08-31 14:22
+      const m = s.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+      if (m) return m[2] + "-" + m[3] + " " + m[4] + ":" + m[5];
+      return s.slice(0, 16);
+    }
+
+    function fmtNameShort(name) {
+      const raw = String(name || "").trim();
+      if (!raw) return "—";
+      const first = raw.split(/\s+/)[0];
+      if (first.length <= 16) return first;
+      return first.slice(0, 14) + "…";
+    }
+
     function fmtSec(s) {
       s = Number(s) || 0;
       if (s < 60) return s.toFixed(1) + "s";
@@ -1621,28 +1705,16 @@
           <td>${esc(w.people || 0)}</td>
         </tr>`).join("") || `<tr><td colspan="7" class="hint">No workflow jobs in this range</td></tr>`;
 
-        const sb = $("summaryBody");
-        sb.innerHTML = (summ.users || []).map((u) => `<tr>
-          <td class="mono">${esc(u.machine_id || "—")}</td>
-          <td>${esc(u.label || "—")}</td>
-          <td>${esc(u.group || "—")}</td>
-          <td class="mono">${esc(u.ip || "")}</td>
-          <td>${esc(u.jobs_queued || 0)}</td>
-          <td>${esc(u.jobs_done || 0)}</td>
-          <td>${esc(u.jobs_error || 0)}</td>
-          <td>${esc(u.uploads || 0)}</td>
-          <td>${esc(fmtSec(u.total_runtime_sec))}</td>
-          <td>${esc(fmtSec(u.avg_runtime_sec))}</td>
-          <td class="mono">${esc((u.first_iso || "").replace("T", " "))}</td>
-          <td class="mono">${esc((u.last_iso || "").replace("T", " "))}</td>
-        </tr>`).join("") || `<tr><td colspan="12" class="hint">No usage yet — run a Nuke job through :8600/comfyui</td></tr>`;
+        LAST_SUMM = summ;
+        renderPeopleTable(summ);
 
+        const short = $("shortNames") && $("shortNames").checked;
         const lb = $("logBody");
         lb.innerHTML = (logs.logs || []).map((r) => `<tr>
-          <td class="mono">${esc((r.ts_iso || "").replace("T", " "))}</td>
+          <td class="mono">${esc(short ? fmtTimeShort(r.ts_iso) : (r.ts_iso || "").replace("T", " "))}</td>
           <td class="mono">${esc(r.id || "")}</td>
           <td><span class="badge">${esc(r.event || "")}</span></td>
-          <td>${esc(r.label || "—")}</td>
+          <td>${esc(short ? fmtNameShort(r.label) : (r.label || "—"))}</td>
           <td>${esc(r.group || "—")}</td>
           <td class="mono">${esc(r.ip || "")}</td>
           <td class="mono">${esc(r.machine_id || "—")}</td>
@@ -1653,13 +1725,83 @@
           <td class="mono">${esc(r.prompt_id || "—")}</td>
           <td>${esc(r.detail || "")}</td>
         </tr>`).join("") || `<tr><td colspan="12" class="hint">No events in range</td></tr>`;
-        showMsg($("logMsg"), `Loaded ${logs.count || 0} events · ${summ.count_users || 0} machines`, true);
+        showMsg($("logMsg"), `Loaded ${logs.count || 0} events · ${summ.count_users || 0} people (all)`, true);
       } catch (err) {
         showMsg($("logMsg"), err.message, false);
       }
     }
 
+    let LAST_SUMM = null;
+
+    function renderPeopleTable(summ) {
+      const sb = $("summaryBody");
+      if (!sb) return;
+      const short = $("shortNames") && $("shortNames").checked;
+      const sort = ($("peopleSort") && $("peopleSort").value) || "latest";
+      const people = (summ.users || []).slice();
+      people.sort((a, b) => {
+        if (sort === "jobs") {
+          return (b.jobs_done || 0) - (a.jobs_done || 0) || (b.last_ts || 0) - (a.last_ts || 0);
+        }
+        if (sort === "runtime") {
+          return (b.total_runtime_sec || 0) - (a.total_runtime_sec || 0) || (b.last_ts || 0) - (a.last_ts || 0);
+        }
+        return (b.last_ts || 0) - (a.last_ts || 0);
+      });
+      sb.innerHTML = people.map((u, i) => `<tr>
+          <td class="mono">${short ? (i + 1) : esc(u.machine_id || "—")}</td>
+          <td>${esc(short ? fmtNameShort(u.label) : (u.label || "—"))}</td>
+          <td>${esc(u.group || "—")}</td>
+          <td class="mono">${esc(u.ip || "")}</td>
+          <td>${esc(u.jobs_queued || 0)}</td>
+          <td>${esc(u.jobs_done || 0)}</td>
+          <td>${esc(u.jobs_error || 0)}</td>
+          <td>${esc(u.uploads || 0)}</td>
+          <td>${esc(fmtSec(u.total_runtime_sec))}</td>
+          <td>${esc(fmtSec(u.avg_runtime_sec))}</td>
+          <td class="mono">${esc(short ? fmtTimeShort(u.first_iso) : (u.first_iso || "").replace("T", " "))}</td>
+          <td class="mono">${esc(short ? fmtTimeShort(u.last_iso) : (u.last_iso || "").replace("T", " "))}</td>
+        </tr>`).join("") || `<tr><td colspan="12" class="hint">No usage yet — run a Nuke job through :8600/comfyui</td></tr>`;
+    }
+
+    async function lookupJob() {
+      const pid = ($("jobId").value || "").trim();
+      if (!pid) {
+        showMsg($("jobMsg"), "Paste a ComfyUI prompt / job id first", false);
+        return;
+      }
+      try {
+        const data = await api("/admin/api/logs/job?id=" + encodeURIComponent(pid));
+        const box = $("jobWho");
+        if (!data.found || !data.who) {
+          box.innerHTML = "";
+          showMsg($("jobMsg"), "No match for that job id in the usage log", false);
+          return;
+        }
+        const w = data.who;
+        const short = $("shortNames") && $("shortNames").checked;
+        box.innerHTML = `<div class="stat-grid">
+          <div class="stat"><div class="n">${esc(short ? fmtNameShort(w.label) : (w.label || "—"))}</div><div class="t">Who</div></div>
+          <div class="stat"><div class="n">${esc(w.group || "—")}</div><div class="t">Group</div></div>
+          <div class="stat"><div class="n">${esc(w.ip || "—")}</div><div class="t">IP</div></div>
+          <div class="stat"><div class="n">${esc(w.workflow || "—")}</div><div class="t">Workflow</div></div>
+          <div class="stat"><div class="n">${esc(short ? fmtTimeShort(w.ts_iso) : (w.ts_iso || "").replace("T"," "))}</div><div class="t">When</div></div>
+          <div class="stat"><div class="n">${w.runtime_sec != null ? esc(fmtSec(w.runtime_sec)) : "—"}</div><div class="t">Runtime</div></div>
+        </div>
+        <p class="hint mono">prompt_id: ${esc(w.prompt_id || pid)} · ${data.count || 0} matching event(s)</p>`;
+        showMsg($("jobMsg"), "Matched " + (w.label || w.ip || "unknown") + " · " + (w.workflow || "workflow unknown"), true);
+      } catch (e) {
+        showMsg($("jobMsg"), e.message, false);
+      }
+    }
+
     $("btnLogRefresh").onclick = () => loadLogs();
+    $("btnJobLookup").onclick = lookupJob;
+    $("jobId").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") lookupJob();
+    });
+    $("peopleSort").onchange = () => { if (LAST_SUMM) renderPeopleTable(LAST_SUMM); };
+    $("shortNames").onchange = () => { if (LAST_SUMM) { renderPeopleTable(LAST_SUMM); } };
     $("btnRangeDaily").onclick = () => setLogRange("today");
     $("btnRange24h").onclick = () => setLogRange("24h");
     $("btnRange30d").onclick = () => setLogRange("30d");

@@ -8,8 +8,10 @@ Entries support short name (label), group, enable flag; admin UI can edit/rename
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import hmac
+import io
 import ipaddress
 import json
 import os
@@ -1052,6 +1054,121 @@ class AccessControl:
             self._remember_group(g)
             self._save_unlocked()
             return g
+
+    def export_machines_csv(self) -> str:
+        """All machine IPs as CSV (name, group, ip, enabled, workflows)."""
+        buf = io.StringIO()
+        fields = [
+            "name",
+            "group",
+            "ip",
+            "enabled",
+            "allowed_workflows",
+            "denied_workflows",
+        ]
+        w = csv.DictWriter(buf, fieldnames=fields)
+        w.writeheader()
+        snap = self.snapshot()
+        for e in snap.get("ips") or []:
+            allowed = e.get("allowed_workflows") or []
+            mode = e.get("workflow_mode") or "all"
+            w.writerow(
+                {
+                    "name": e.get("label") or "",
+                    "group": e.get("group") or UNGROUPED,
+                    "ip": e.get("ip") or "",
+                    "enabled": "1" if e.get("enabled") else "0",
+                    "allowed_workflows": ""
+                    if mode == "all"
+                    else ";".join(allowed),
+                    "denied_workflows": ";".join(e.get("denied_workflows") or []),
+                }
+            )
+        return buf.getvalue()
+
+    def import_machines_csv(self, text: str) -> Dict[str, Any]:
+        """
+        Upsert machines from CSV. Columns: name, group, ip, enabled
+        (optional allowed_workflows / denied_workflows as ;-separated json names).
+        Skips 0.0.0.0 / empty IP. Existing IPs are updated (name/group/enabled).
+        """
+        raw = (text or "").lstrip("\ufeff")
+        if not raw.strip():
+            raise ValueError("empty CSV")
+        reader = csv.DictReader(io.StringIO(raw))
+        if not reader.fieldnames:
+            raise ValueError("CSV has no header row")
+        headers = {str(h or "").strip().lower(): h for h in reader.fieldnames}
+
+        def col(*names: str) -> Optional[str]:
+            for n in names:
+                if n.lower() in headers:
+                    return headers[n.lower()]
+            return None
+
+        c_name = col("name", "label", "short name", "user")
+        c_group = col("group")
+        c_ip = col("ip", "ip address", "address")
+        c_en = col("enabled", "on")
+        c_allow = col("allowed_workflows", "workflows", "allowed")
+        c_deny = col("denied_workflows", "denied", "blocked")
+        if not c_ip:
+            raise ValueError("CSV must have an ip column")
+
+        added = 0
+        updated = 0
+        skipped: List[str] = []
+        errors: List[str] = []
+        for i, row in enumerate(reader, start=2):
+            ip_s = str(row.get(c_ip) or "").strip()
+            label = str(row.get(c_name) or "").strip() if c_name else ""
+            group = str(row.get(c_group) or "").strip() if c_group else ""
+            if not ip_s:
+                skipped.append("row %s empty IP (%s)" % (i, label or "?"))
+                continue
+            if ip_s in ("0.0.0.0", "255.255.255.255"):
+                skipped.append("row %s invalid IP %s (%s)" % (i, ip_s, label or "?"))
+                continue
+            en = True
+            if c_en:
+                v = str(row.get(c_en) or "1").strip().lower()
+                en = v not in ("0", "false", "off", "no", "n")
+            try:
+                existed = self._find_index(ip=ip_s) >= 0
+                e = self.upsert_ip(ip_s, label=label, enabled=en, group=group)
+                if c_allow or c_deny:
+                    allow_raw = str(row.get(c_allow) or "").strip() if c_allow else ""
+                    deny_raw = str(row.get(c_deny) or "").strip() if c_deny else ""
+                    with self._lock:
+                        idx = self._find_index(ip=str(e.get("ip") or ip_s))
+                        if idx >= 0:
+                            ips = list(self._cfg.get("ips") or [])
+                            ent = _normalize_entry(ips[idx])
+                            if allow_raw.lower() in ("", "*", "all"):
+                                ent["allowed_workflows"] = None
+                            else:
+                                ent["allowed_workflows"] = _normalize_workflows(
+                                    [x.strip() for x in allow_raw.replace(",", ";").split(";") if x.strip()]
+                                )
+                            ent["denied_workflows"] = _normalize_workflows(
+                                [x.strip() for x in deny_raw.replace(",", ";").split(";") if x.strip()]
+                            ) if deny_raw else []
+                            ips[idx] = ent
+                            self._cfg["ips"] = ips
+                            self._save_unlocked()
+                if existed:
+                    updated += 1
+                else:
+                    added += 1
+            except Exception as ex:
+                errors.append("row %s %s: %s" % (i, ip_s, ex))
+        return {
+            "added": added,
+            "updated": updated,
+            "skipped": skipped,
+            "errors": errors,
+            "ok": not errors,
+        }
 
     def remove_group(self, name: str, reassign_to: str = UNGROUPED) -> int:
         """Remove group name; move members to reassign_to. Returns member count."""

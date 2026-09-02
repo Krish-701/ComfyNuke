@@ -379,7 +379,32 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             self._send_bytes(body, "text/html; charset=utf-8")
             return True
 
+        if path_only == "/admin/api/machines/export.csv":
+            if not self._require_perm("machines.view"):
+                return True
+            try:
+                self.access.reload()
+            except Exception:
+                pass
+            csv_text = self.access.export_machines_csv()
+            body = csv_text.encode("utf-8")
+            self._send_bytes(
+                body,
+                "text/csv; charset=utf-8",
+                extra_headers=[
+                    (
+                        "Content-Disposition",
+                        'attachment; filename="pixedit_machines.csv"',
+                    )
+                ],
+            )
+            return True
+
         if path_only == "/admin/api/state":
+            try:
+                self.access.reload()
+            except Exception:
+                pass
             st = self.access.snapshot()
             sess = self._session_user()
             st["authenticated"] = bool(sess)
@@ -440,6 +465,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
         if path_only in (
             "/admin/api/logs",
             "/admin/api/logs/summary",
+            "/admin/api/logs/job",
             "/admin/api/logs/export.csv",
             "/admin/api/logs/export_summary.csv",
             "/admin/api/logs/export_workflows.csv",
@@ -501,6 +527,36 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 limit = int(_one("limit", "500"))
             except Exception:
                 limit = 500
+
+            if path_only == "/admin/api/logs/job":
+                pid = _one("id") or _one("prompt_id") or _one("q")
+                hits = self.usage.find_by_prompt_id(pid, limit=80)
+                who = None
+                for r in hits:
+                    if r.get("label") or r.get("ip"):
+                        who = {
+                            "label": r.get("label") or "",
+                            "group": r.get("group") or "",
+                            "ip": r.get("ip") or "",
+                            "machine_id": r.get("machine_id") or "",
+                            "workflow": r.get("workflow") or "",
+                            "event": r.get("event") or "",
+                            "ts_iso": r.get("ts_iso") or "",
+                            "runtime_sec": r.get("runtime_sec"),
+                            "prompt_id": r.get("prompt_id") or "",
+                        }
+                        break
+                self._send_json(
+                    {
+                        "ok": True,
+                        "prompt_id": pid,
+                        "found": bool(hits),
+                        "who": who,
+                        "count": len(hits),
+                        "events": hits,
+                    }
+                )
+                return True
 
             if path_only == "/admin/api/logs/summary":
                 payload = self.usage.summary(since=since, until=until)
@@ -664,6 +720,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             "/admin/api/ip_workflow_add": "machines.edit",
             "/admin/api/ip_workflow_remove": "machines.edit",
             "/admin/api/set_group_workflow": "machines.edit",
+            "/admin/api/machines/import": "machines.edit",
         }
 
         try:
@@ -818,6 +875,11 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                     filename=str(data.get("file") or data.get("workflow") or ""),
                 )
                 self._send_json({"ok": True, "entry": e})
+                return True
+            if path_only == "/admin/api/machines/import":
+                csv_text = str(data.get("csv") or data.get("text") or "")
+                out = self.access.import_machines_csv(csv_text)
+                self._send_json({"ok": True, **out})
                 return True
             if path_only == "/admin/api/set_group_workflow":
                 out = self.access.set_group_workflow(
