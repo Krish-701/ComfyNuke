@@ -376,7 +376,15 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 self._send_bytes(b"admin UI missing\n", "text/plain", status=500)
                 return True
             body = html_path.read_bytes()
-            self._send_bytes(body, "text/html; charset=utf-8")
+            self._send_bytes(
+                body,
+                "text/html; charset=utf-8",
+                extra_headers=[
+                    ("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"),
+                    ("Pragma", "no-cache"),
+                    ("Expires", "0"),
+                ],
+            )
             return True
 
         if path_only == "/admin/api/machines/export.csv":

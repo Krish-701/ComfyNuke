@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>Pix-Edit Access Control</title>
   <style>
     :root {
@@ -495,23 +498,23 @@
             </table>
           </div>
           <h2 style="margin-top:18px">People — runs and time</h2>
-          <p class="hint">Everyone in this range. Default sort is <b>latest activity</b> (who used it most recently first).</p>
+          <p class="hint">
+            Only named users who actually <b>queued or finished a job</b>.
+            No name or 0 jobs are omitted here — they stay in the event log below.
+            Sort default: <b>latest activity</b>.
+          </p>
           <div class="log-table-wrap tall" style="margin-top:10px">
             <table>
               <thead>
                 <tr>
-                  <th>Machine ID</th>
+                  <th>#</th>
                   <th>Name</th>
                   <th>Group</th>
                   <th>IP</th>
                   <th>Jobs queued</th>
                   <th>Jobs done</th>
-                  <th>Errors</th>
-                  <th>Uploads</th>
                   <th>Total runtime</th>
-                  <th>Avg runtime</th>
-                  <th>First seen</th>
-                  <th>Last seen</th>
+                  <th>Last used</th>
                 </tr>
               </thead>
               <tbody id="summaryBody"></tbody>
@@ -521,7 +524,7 @@
 
         <div class="card">
           <h2>Event log (detail)</h2>
-          <p class="hint">Full activity with unique event ID, prompt ID, runtime when job completes.</p>
+          <p class="hint">All events in the range (bootstraps, uploads, unnamed IPs, zero-job noise, prompt ids).</p>
           <div class="log-table-wrap">
             <table>
               <thead>
@@ -662,11 +665,19 @@
     }
 
     async function api(path, opts = {}) {
-      const res = await fetch(path, {
+      const method = String(opts.method || "GET").toUpperCase();
+      let url = path;
+      if (method === "GET") {
+        url += (url.indexOf("?") >= 0 ? "&" : "?") + "_=" + Date.now();
+      }
+      const headers = Object.assign({}, opts.headers || {});
+      if (method !== "GET" && !headers["Content-Type"]) {
+        headers["Content-Type"] = "application/json";
+      }
+      const res = await fetch(url, Object.assign({
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-        ...opts,
-      });
+        cache: "no-store",
+      }, opts, { headers }));
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || res.statusText || "request failed");
       return data;
@@ -1347,7 +1358,12 @@
         $("tabRoutes").classList.toggle("hidden", name !== "routes");
         $("tabLogs").classList.toggle("hidden", name !== "logs");
         $("tabUsers").classList.toggle("hidden", name !== "users");
-        if (name === "logs") loadLogs();
+        if (name === "logs") {
+          loadLogs({ silent: false });
+          startLogsAutoRefresh();
+        } else {
+          stopLogsAutoRefresh();
+        }
         if (name === "users") loadUsers();
         if (name === "routes") loadRoutes().catch((e) => showMsg($("routesMsg"), e.message, false));
         if (name === "wfacl") {
@@ -1675,13 +1691,44 @@
       return p.toString();
     }
 
-    async function loadLogs() {
+    let logsSeq = 0;
+    let logsTimer = null;
+
+    function stopLogsAutoRefresh() {
+      if (logsTimer) {
+        clearInterval(logsTimer);
+        logsTimer = null;
+      }
+    }
+
+    function startLogsAutoRefresh() {
+      stopLogsAutoRefresh();
+      logsTimer = setInterval(() => {
+        const tab = $("tabLogs");
+        if (tab && !tab.classList.contains("hidden")) {
+          loadLogs({ silent: true });
+        }
+      }, 10000);
+    }
+
+    async function loadLogs(opts) {
+      opts = opts || {};
+      const seq = ++logsSeq;
+      const btn = $("btnLogRefresh");
+      if (btn && !opts.silent) {
+        btn.disabled = true;
+        btn.textContent = "Refreshing…";
+      }
+      if (!opts.silent) {
+        showMsg($("logMsg"), "Refreshing live data…", true);
+      }
       try {
         const qs = logQuery();
         const [summ, logs] = await Promise.all([
           api("/admin/api/logs/summary?" + qs.replace(/limit=\d+/, "limit=50000")),
           api("/admin/api/logs?" + qs),
         ]);
+        if (seq !== logsSeq) return;
         const t = summ.totals || {};
         $("logStats").innerHTML = [
           ["Events", t.events || 0],
@@ -1725,9 +1772,23 @@
           <td class="mono">${esc(r.prompt_id || "—")}</td>
           <td>${esc(r.detail || "")}</td>
         </tr>`).join("") || `<tr><td colspan="12" class="hint">No events in range</td></tr>`;
-        showMsg($("logMsg"), `Loaded ${logs.count || 0} events · ${summ.count_users || 0} people (all)`, true);
+        const namedJobs = (summ.users || []).filter((u) => {
+          const name = String(u.label || "").trim();
+          const jobs = (u.jobs_queued || 0) + (u.jobs_done || 0);
+          return name && name !== "—" && jobs > 0;
+        });
+        const now = new Date();
+        const hh = String(now.getHours()).padStart(2, "0");
+        const mm = String(now.getMinutes()).padStart(2, "0");
+        const ss = String(now.getSeconds()).padStart(2, "0");
+        showMsg($("logMsg"), `Updated ${hh}:${mm}:${ss} · ${logs.count || 0} events · ${namedJobs.length} people with jobs`, true);
       } catch (err) {
-        showMsg($("logMsg"), err.message, false);
+        if (seq === logsSeq) showMsg($("logMsg"), err.message, false);
+      } finally {
+        if (btn && seq === logsSeq) {
+          btn.disabled = false;
+          btn.textContent = "Refresh";
+        }
       }
     }
 
@@ -1738,7 +1799,12 @@
       if (!sb) return;
       const short = $("shortNames") && $("shortNames").checked;
       const sort = ($("peopleSort") && $("peopleSort").value) || "latest";
-      const people = (summ.users || []).slice();
+      const people = (summ.users || []).filter((u) => {
+        const name = String(u.label || "").trim();
+        if (!name || name === "—" || name.toLowerCase() === "unknown") return false;
+        const jobs = Number(u.jobs_queued || 0) + Number(u.jobs_done || 0);
+        return jobs > 0;
+      });
       people.sort((a, b) => {
         if (sort === "jobs") {
           return (b.jobs_done || 0) - (a.jobs_done || 0) || (b.last_ts || 0) - (a.last_ts || 0);
@@ -1749,19 +1815,15 @@
         return (b.last_ts || 0) - (a.last_ts || 0);
       });
       sb.innerHTML = people.map((u, i) => `<tr>
-          <td class="mono">${short ? (i + 1) : esc(u.machine_id || "—")}</td>
-          <td>${esc(short ? fmtNameShort(u.label) : (u.label || "—"))}</td>
+          <td class="mono">${i + 1}</td>
+          <td>${esc(short ? fmtNameShort(u.label) : u.label)}</td>
           <td>${esc(u.group || "—")}</td>
           <td class="mono">${esc(u.ip || "")}</td>
           <td>${esc(u.jobs_queued || 0)}</td>
           <td>${esc(u.jobs_done || 0)}</td>
-          <td>${esc(u.jobs_error || 0)}</td>
-          <td>${esc(u.uploads || 0)}</td>
           <td>${esc(fmtSec(u.total_runtime_sec))}</td>
-          <td>${esc(fmtSec(u.avg_runtime_sec))}</td>
-          <td class="mono">${esc(short ? fmtTimeShort(u.first_iso) : (u.first_iso || "").replace("T", " "))}</td>
           <td class="mono">${esc(short ? fmtTimeShort(u.last_iso) : (u.last_iso || "").replace("T", " "))}</td>
-        </tr>`).join("") || `<tr><td colspan="12" class="hint">No usage yet — run a Nuke job through :8600/comfyui</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="8" class="hint">No named users with jobs in this range — see event log below</td></tr>`;
     }
 
     async function lookupJob() {
@@ -1795,7 +1857,10 @@
       }
     }
 
-    $("btnLogRefresh").onclick = () => loadLogs();
+    $("btnLogRefresh").onclick = (e) => {
+      if (e) e.preventDefault();
+      loadLogs({ silent: false });
+    };
     $("btnJobLookup").onclick = lookupJob;
     $("jobId").addEventListener("keydown", (e) => {
       if (e.key === "Enter") lookupJob();
