@@ -33,10 +33,15 @@
       border-radius: 12px; padding: 18px 18px 16px; margin-bottom: 16px;
     }
     label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
-    input[type=text], input[type=password], select {
+    input[type=text], input[type=password], input[type=date], select {
       width: 100%; padding: 10px 12px; border-radius: 8px;
       border: 1px solid var(--border); background: #0d121a; color: var(--text);
       margin-bottom: 12px; font-size: 0.95rem;
+      color-scheme: dark;
+    }
+    input[type=date] {
+      min-width: 168px; font-size: 1.02rem; font-weight: 600;
+      letter-spacing: 0.02em; cursor: pointer;
     }
     button, .btn {
       appearance: none; border: 0; border-radius: 8px; padding: 8px 12px;
@@ -143,6 +148,29 @@
     .log-table-wrap { overflow-x: auto; max-height: 480px; overflow-y: auto; }
     .log-table-wrap.tall { max-height: 720px; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
+    .date-bar {
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;
+      background: #121a26; border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px 14px 12px; margin: 12px 0 14px;
+    }
+    .date-bar .date-field { flex: 0 0 auto; min-width: 180px; }
+    .date-bar .date-field label {
+      font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--accent); font-weight: 700; margin-bottom: 6px;
+    }
+    .date-bar .presets { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 280px; align-items: center; }
+    .date-bar .presets button { padding: 8px 11px; }
+    .date-bar button.active-range {
+      background: var(--accent); color: #fff;
+    }
+    .range-chip {
+      display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      background: #182131; border: 1px solid var(--accent);
+      color: var(--text); border-radius: 999px; padding: 8px 14px;
+      font-weight: 700; font-size: 0.95rem; margin: 0 0 12px;
+    }
+    .range-chip .sep { color: var(--accent); font-weight: 800; }
+    .range-chip .muted { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
   </style>
 </head>
 <body>
@@ -430,19 +458,31 @@
         </div>
         <div class="card">
           <h2>Usage summary</h2>
+          <p class="hint">Pick a <b>From</b> and <b>To</b> date (calendar), or a preset. Tables below show only that window.</p>
+          <div class="date-bar">
+            <div class="date-field">
+              <label for="logFrom">From date</label>
+              <input id="logFrom" type="date" />
+            </div>
+            <div class="date-field">
+              <label for="logTo">To date</label>
+              <input id="logTo" type="date" />
+            </div>
+            <div style="flex:0 0 auto;margin-bottom:12px">
+              <button id="btnApplyDates" type="button">Apply dates</button>
+            </div>
+            <div class="presets">
+              <button id="btnRangeDaily" class="secondary" type="button">Today</button>
+              <button id="btnRangeYday" class="secondary" type="button">Yesterday</button>
+              <button id="btnRange7d" class="secondary" type="button">Last 7 days</button>
+              <button id="btnRange30d" class="secondary" type="button">Last 30 days</button>
+              <button id="btnRangeMonth" class="secondary" type="button">This month</button>
+              <button id="btnRange24h" class="secondary" type="button">Last 24 hours</button>
+            </div>
+          </div>
+          <div id="rangeChip" class="range-chip">Select a date range</div>
           <div class="stat-grid" id="logStats"></div>
           <div class="toolbar">
-            <button id="btnRangeDaily" class="secondary" type="button">Daily</button>
-            <button id="btnRange24h" class="secondary" type="button">Last 24 hours</button>
-            <button id="btnRange30d" class="secondary" type="button">Last 30 days</button>
-            <div>
-              <label>From</label>
-              <input id="logFrom" type="text" placeholder="2026-08-01" style="margin:0" />
-            </div>
-            <div>
-              <label>To</label>
-              <input id="logTo" type="text" placeholder="2026-08-31" style="margin:0" />
-            </div>
             <div>
               <label>Event</label>
               <select id="logEvent" style="margin:0">
@@ -1359,6 +1399,8 @@
         $("tabLogs").classList.toggle("hidden", name !== "logs");
         $("tabUsers").classList.toggle("hidden", name !== "users");
         if (name === "logs") {
+          if (!$("logFrom").value || !$("logTo").value) fillDatesForPreset(LOG_RANGE || "today");
+          markRangeButtons(LOG_RANGE || "today");
           loadLogs({ silent: false });
           startLogsAutoRefresh();
         } else {
@@ -1658,20 +1700,117 @@
       return h + "h " + (m % 60) + "m";
     }
 
-    let LOG_RANGE = "";
+    let LOG_RANGE = "today";
+    const RANGE_BTNS = [
+      "btnRangeDaily",
+      "btnRangeYday",
+      "btnRange7d",
+      "btnRange30d",
+      "btnRangeMonth",
+      "btnRange24h",
+    ];
+    const RANGE_BTN_MAP = {
+      today: "btnRangeDaily",
+      yesterday: "btnRangeYday",
+      "7d": "btnRange7d",
+      "30d": "btnRange30d",
+      month: "btnRangeMonth",
+      "24h": "btnRange24h",
+    };
+
+    function ymd(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return y + "-" + m + "-" + day;
+    }
+
+    function addDays(d, n) {
+      const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      x.setDate(x.getDate() + n);
+      return x;
+    }
+
+    function fillDatesForPreset(kind) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      let from = today;
+      let to = today;
+      if (kind === "yesterday") {
+        from = to = addDays(today, -1);
+      } else if (kind === "7d") {
+        from = addDays(today, -6);
+      } else if (kind === "30d") {
+        from = addDays(today, -29);
+      } else if (kind === "month") {
+        from = new Date(today.getFullYear(), today.getMonth(), 1);
+      } else if (kind === "24h") {
+        from = addDays(today, -1);
+      }
+      $("logFrom").value = ymd(from);
+      $("logTo").value = ymd(to);
+    }
+
+    function markRangeButtons(kind) {
+      RANGE_BTNS.forEach((id) => {
+        const b = $(id);
+        if (!b) return;
+        const on = RANGE_BTN_MAP[kind] === id;
+        b.classList.toggle("secondary", !on);
+        b.classList.toggle("active-range", on);
+      });
+    }
+
+    function prettyDate(isoDay) {
+      if (!isoDay) return "—";
+      const p = isoDay.split("-");
+      if (p.length !== 3) return isoDay;
+      const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      const mi = parseInt(p[1], 10) - 1;
+      return (parseInt(p[2], 10) || p[2]) + " " + (months[mi] || p[1]) + " " + p[0];
+    }
+
+    function updateRangeChip(from, to, kind) {
+      const chip = $("rangeChip");
+      if (!chip) return;
+      const label = {
+        today: "Today",
+        yesterday: "Yesterday",
+        "7d": "Last 7 days",
+        "30d": "Last 30 days",
+        month: "This month",
+        "24h": "Last 24 hours",
+        custom: "Custom",
+      }[kind || "custom"] || "Custom";
+      chip.innerHTML =
+        '<span class="muted">' + esc(label) + "</span>" +
+        "<span>" + esc(prettyDate(from)) + '</span>' +
+        '<span class="sep">→</span>' +
+        "<span>" + esc(prettyDate(to)) + "</span>";
+    }
 
     function setLogRange(kind) {
       LOG_RANGE = kind;
-      $("logFrom").value = "";
-      $("logTo").value = "";
-      ["btnRangeDaily", "btnRange24h", "btnRange30d"].forEach((id) => {
-        const b = $(id);
-        if (!b) return;
-        b.classList.toggle("secondary", true);
-      });
-      const map = { today: "btnRangeDaily", "24h": "btnRange24h", "30d": "btnRange30d" };
-      const active = $(map[kind] || "");
-      if (active) active.classList.remove("secondary");
+      fillDatesForPreset(kind);
+      markRangeButtons(kind);
+      updateRangeChip($("logFrom").value, $("logTo").value, kind);
+      loadLogs();
+    }
+
+    function applyCustomDates() {
+      const from = ($("logFrom").value || "").trim();
+      const to = ($("logTo").value || "").trim();
+      if (!from && !to) {
+        showMsg($("logMsg"), "Pick a From and To date", false);
+        return;
+      }
+      if (from && to && from > to) {
+        showMsg($("logMsg"), "From date must be on or before To date", false);
+        return;
+      }
+      LOG_RANGE = "";
+      markRangeButtons("");
+      updateRangeChip(from, to, "custom");
       loadLogs();
     }
 
@@ -1681,10 +1820,14 @@
       const to = ($("logTo").value || "").trim();
       const ev = $("logEvent").value;
       const q = ($("logQ").value || "").trim();
-      if (from || to) LOG_RANGE = "";
-      if (LOG_RANGE) p.set("range", LOG_RANGE);
-      if (from) p.set("from", from);
-      if (to) p.set("to", to);
+      if (LOG_RANGE === "24h") {
+        p.set("range", "24h");
+      } else if (from || to) {
+        if (from) p.set("from", from);
+        if (to) p.set("to", to);
+      } else if (LOG_RANGE) {
+        p.set("range", LOG_RANGE);
+      }
       if (ev) p.set("event", ev);
       if (q) p.set("q", q);
       p.set("limit", "1000");
@@ -1781,7 +1924,16 @@
         const hh = String(now.getHours()).padStart(2, "0");
         const mm = String(now.getMinutes()).padStart(2, "0");
         const ss = String(now.getSeconds()).padStart(2, "0");
-        showMsg($("logMsg"), `Updated ${hh}:${mm}:${ss} · ${logs.count || 0} events · ${namedJobs.length} people with jobs`, true);
+        const fromD = summ.from_date || ($("logFrom").value || "");
+        const toD = summ.to_date || ($("logTo").value || "");
+        if (fromD) $("logFrom").value = fromD;
+        if (toD) $("logTo").value = toD;
+        updateRangeChip(fromD, toD, LOG_RANGE || "custom");
+        showMsg(
+          $("logMsg"),
+          `Updated ${hh}:${mm}:${ss} · ${prettyDate(fromD)} → ${prettyDate(toD)} · ${logs.count || 0} events · ${namedJobs.length} people with jobs`,
+          true
+        );
       } catch (err) {
         if (seq === logsSeq) showMsg($("logMsg"), err.message, false);
       } finally {
@@ -1868,8 +2020,14 @@
     $("peopleSort").onchange = () => { if (LAST_SUMM) renderPeopleTable(LAST_SUMM); };
     $("shortNames").onchange = () => { if (LAST_SUMM) { renderPeopleTable(LAST_SUMM); } };
     $("btnRangeDaily").onclick = () => setLogRange("today");
+    $("btnRangeYday").onclick = () => setLogRange("yesterday");
+    $("btnRange7d").onclick = () => setLogRange("7d");
     $("btnRange24h").onclick = () => setLogRange("24h");
     $("btnRange30d").onclick = () => setLogRange("30d");
+    $("btnRangeMonth").onclick = () => setLogRange("month");
+    $("btnApplyDates").onclick = applyCustomDates;
+    $("logFrom").onchange = applyCustomDates;
+    $("logTo").onchange = applyCustomDates;
     $("btnCsvEvents").onclick = () => {
       window.location.href = "/admin/api/logs/export.csv?" + logQuery();
     };

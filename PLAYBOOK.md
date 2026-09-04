@@ -1,6 +1,25 @@
 # PLAYBOOK — Krish-ComfyNuke (Nuke ↔ ComfyUI)
 
-**Studio operators (start/stop/admin UI):** see [docs/STUDIO_PLAYBOOK.md](docs/STUDIO_PLAYBOOK.md).
+**Studio operators (start/stop/admin UI, Hi-res, Description, usage logs):** see **[docs/STUDIO_PLAYBOOK.md](docs/STUDIO_PLAYBOOK.md)** — that file is the live hub (`192.168.91.11`) source of truth as of **2026-09-04**.
+
+This document is the older Windows-dev handoff. Paths like `D:\AI-Dev\Krish-ComfyNuke` and default `:8188` on `192.168.91.13` are **stale** for the studio. Use the Ubuntu repo `/home/radhakrishnan/ComfyUI-Setup/ComfyNuke` and `:8600` bootstrap.
+
+### Studio current (2026-09-04) — do not ignore
+
+| Mode | Menu | Workflow | Server | Inject |
+|------|------|----------|--------|--------|
+| Edit Image | Pix-Edit → Edit Image... | `Edit_Image_v08.json` | hub `:8166` via `:8600/comfyui-r/8166` | plate `80`, mask `123`, prompt `109.value` |
+| Edit Image Hi-res | Pix-Edit → Edit Image Hi-res... | `Edit_Image_Hi_res_v02.json` (alias `Edit_Image_Hi_res.json`) | `192.168.91.12:8166` via `:8600/comfyui-r/8166-12` | plate `164`, mask `167`, prompt `161.value`. If down: popup only, use Edit Image. |
+| Image Gen | Pix-Edit → Image Gen... | `Image_generation_v01.json` | hub `:8177` | prompt `73.value` |
+| Image Description | Pix-Edit → Image Description... | `Image_Description_v01.json` | hub `:8177` | text `4`, LoadImage `5`, PreviewAny `12` |
+| Image to Video | Pix-Edit → Image to Video... | `video_minimax_h3_i2v.json` | (node may still be missing on backends) | LoadImage `114`, prompt `141.value` |
+
+Artist one-liner: `nuke/artist_one_liner.txt` → `http://192.168.91.11:8600/nuke/remote_bootstrap.py`.
+
+- MOV/EXR sequences: write **current frame** PNG, then upload.
+- Description: if **Crop** is selected, only cropped pixels are described.
+- Bootstrap 403 on `Edit_Image_Hi_res_v01.json`: restart `:8600` allow-list; v01 is optional so pull must not abort.
+- Admin usage logs: From/To **date** pickers + presets (Today / 7d / 30d / month).
 
 Handoff for an autonomous agent that will run commands and edit files.
 Labels: **[VERIFIED]** observed in this workspace/code/runtime · **[INFERRED]** follows from code/evidence, not end-to-end retested here · **[ASSUMED]** no proof — verify before acting · **GAP** unknown, do not invent.

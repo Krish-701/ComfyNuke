@@ -96,6 +96,31 @@ CLIENT_DIR = os.path.join(REPO_ROOT, "client")
 _STUDIO = _load_studio_config(REPO_ROOT)
 
 DEFAULT_WORKFLOW = os.path.join(REPO_ROOT, "Edit_Image_v08.json").replace("\\", "/")
+
+
+def _latest_hires_workflow_path():
+    """Prefer v02; fall back to v01 / generic alias."""
+    for name in (
+        "Edit_Image_Hi_res_v02.json",
+        "Edit_Image_Hi_res.json",
+        "Edit_Image_Hi_res_v01.json",
+    ):
+        p = os.path.join(REPO_ROOT, name)
+        if os.path.isfile(p):
+            return p.replace("\\", "/")
+    return os.path.join(REPO_ROOT, "Edit_Image_Hi_res_v02.json").replace("\\", "/")
+
+
+EDIT_HIRES_WORKFLOW = _latest_hires_workflow_path()
+HIRES_UPSTREAM = "http://192.168.91.12:8166"
+# v02 inject (Edit_Image_Hi_res_v02.json)
+EDIT_HIRES_LOAD = "164"  # plate_srgb
+EDIT_HIRES_MASK = "167"  # mask_luma
+EDIT_HIRES_PROMPT = "161"  # user input text
+# v01 leftover (only if that graph is still selected)
+EDIT_HIRES_LOAD_V01 = "278"
+EDIT_HIRES_MASK_V01 = "297"
+EDIT_HIRES_PROMPT_V01 = "290"
 IMAGE_GEN_WORKFLOW = os.path.join(REPO_ROOT, "Image_generation_v01.json").replace(
     "\\", "/"
 )
@@ -192,14 +217,27 @@ def resolve_server_for_workflow(workflow_path, fallback=None):
     if not cfg:
         cfg = _load_local_routes()
     fname = _workflow_basename(workflow_path)
+    aliases = {fname}
+    fl = fname.lower().replace(" ", "_")
+    if "hi_res" in fl or "hires" in fl:
+        aliases.update(
+            (
+                "Edit_Image_Hi_res.json",
+                "Edit_Image_Hi_res_v02.json",
+                "Edit_Image_Hi_res_v01.json",
+            )
+        )
     sid = None
     for w in cfg.get("workflows") or []:
-        if str(w.get("file") or "") == fname:
+        if str(w.get("file") or "") in aliases:
             sid = str(w.get("server_id") or "").strip()
             break
     if not sid:
         wr = (_STUDIO.get("workflow_routes") or {})
-        sid = str(wr.get(fname) or "").strip()
+        for key in aliases:
+            sid = str(wr.get(key) or "").strip()
+            if sid:
+                break
     if not sid:
         return fallback
     host = _CODE_BASE
@@ -208,6 +246,69 @@ def resolve_server_for_workflow(workflow_path, fallback=None):
             if str(s.get("id")) == sid and s.get("proxy"):
                 return str(s["proxy"]).rstrip("/")
     return ("%s/comfyui-r/%s" % (host, sid)).rstrip("/")
+
+
+def _comfy_is_up(server_url, timeout=5.0):
+    """True if ComfyUI answers (2xx/3xx/401/403). False on connection refused / 5xx."""
+    url = (server_url or "").rstrip("/") + "/system_stats"
+    if not url.startswith("http"):
+        return False
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "ComfyNuke-HiRes-Ping/1.0"}
+        )
+        resp = urllib.request.urlopen(req, timeout=timeout)
+        try:
+            code = int(getattr(resp, "code", 200) or 200)
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+        return code < 500
+    except Exception as e:
+        try:
+            import urllib.error as _ue
+
+            if isinstance(e, _ue.HTTPError):
+                return int(e.code) < 500
+        except Exception:
+            pass
+        return False
+
+
+def _hires_down_message():
+    return (
+        "Edit Image Hi-res is down.\n\n"
+        "The Hi-res ComfyUI is not responding:\n"
+        "  %s\n\n"
+        "You can use Pix-Edit → Edit Image... instead."
+        % HIRES_UPSTREAM
+    )
+
+
+def warn_if_hires_down(server_url=None):
+    """
+    Ping Hi-res (proxy URL first, then the raw 91.12:8166 box).
+    If down, pop a message and return True (caller should abort).
+    """
+    primary = (server_url or "").rstrip("/")
+    if primary and _comfy_is_up(primary):
+        _log("Hi-res ping OK: %s" % primary)
+        return False
+    if primary:
+        _log("Hi-res ping failed: %s" % primary)
+    raw = HIRES_UPSTREAM.rstrip("/")
+    if raw and raw != primary and _comfy_is_up(raw):
+        _log("Hi-res ping OK: %s" % raw)
+        return False
+    if raw and raw != primary:
+        _log("Hi-res ping failed: %s" % raw)
+    try:
+        nuke.message(_hires_down_message())
+    except Exception:
+        _log(_hires_down_message().replace("\n", " | "))
+    return True
 
 
 # Default artist prompt for Edit Image panel (appended / shown in Nuke UI)
@@ -362,7 +463,7 @@ def _refresh_workflow_from_server(wf_path, timeout=60):
         with open(tmp, "wb") as f:
             f.write(data)
         os.replace(tmp, wf_path)
-        _log("workflow refreshed from server: %s (%s bytes) ← %s" % (rel, len(data), url))
+        _log("workflow refreshed from server: %s (%s bytes) <- %s" % (rel, len(data), url))
     except Exception as e:
         # Keep local file if any; do not block the job when offline
         if os.path.isfile(wf_path):
@@ -714,20 +815,58 @@ def _is_linearish_colorspace(cs):
     return any(k in s for k in keys)
 
 
+_MOVIE_EXTS = (
+    ".mov",
+    ".mp4",
+    ".mxf",
+    ".avi",
+    ".mkv",
+    ".webm",
+    ".mpg",
+    ".mpeg",
+    ".m4v",
+)
+_SEQ_STILL_EXTS = (
+    ".exr",
+    ".sxr",
+    ".dpx",
+    ".cin",
+    ".hdr",
+    ".tif",
+    ".tiff",
+    ".iff",
+    ".rla",
+    ".sgi",
+)
+
+
 def _ext_needs_nuke_convert(path):
-    ext = os.path.splitext(path)[1].lower()
-    return ext in (
-        ".exr",
-        ".sxr",
-        ".dpx",
-        ".cin",
-        ".hdr",
-        ".tif",
-        ".tiff",
-        ".iff",
-        ".rla",
-        ".sgi",
-    )
+    ext = os.path.splitext(path or "")[1].lower()
+    return ext in _SEQ_STILL_EXTS or ext in _MOVIE_EXTS
+
+
+def _is_movie_or_sequence(read_node, plate_path=None):
+    """True when the Read is a movie or a frame sequence (not a single still)."""
+    ext = os.path.splitext(plate_path or "")[1].lower()
+    if ext in _MOVIE_EXTS or ext in (".exr", ".sxr", ".dpx", ".cin"):
+        return True
+    raw = ""
+    if read_node is not None:
+        try:
+            raw = str(read_node["file"].value() or "")
+        except Exception:
+            raw = ""
+        try:
+            first = int(read_node["first"].value())
+            last = int(read_node["last"].value())
+            if first != last:
+                return True
+        except Exception:
+            pass
+    blob = (raw + " " + str(plate_path or "")).replace("\\", "/")
+    if "%" in blob or "#" in blob:
+        return True
+    return False
 
 
 def _qimage_can_load(path):
@@ -1209,6 +1348,166 @@ def write_plate_srgb_png(source_node, frame, out_path):
     if not os.path.isfile(out_path) or os.path.getsize(out_path) < 32:
         raise RuntimeError("Failed to write sRGB plate PNG: %s" % out_path)
     return out_path, cs_set
+
+
+def _is_crop_node(node):
+    if node is None:
+        return False
+    try:
+        cls = str(node.Class() or "")
+    except Exception:
+        return False
+    return cls in ("Crop", "Crop2")
+
+
+def _crop_box_xyrt(crop_node):
+    """Nuke Crop box as (x, y, r, t) in Nuke coords (origin bottom-left)."""
+    if crop_node is None or "box" not in crop_node.knobs():
+        return None
+    kn = crop_node["box"]
+    try:
+        x, y, r, t = kn.x(), kn.y(), kn.r(), kn.t()
+    except Exception:
+        try:
+            vals = kn.value()
+            x, y, r, t = vals[0], vals[1], vals[2], vals[3]
+        except Exception:
+            return None
+    try:
+        x, y, r, t = float(x), float(y), float(r), float(t)
+    except Exception:
+        return None
+    if r <= x or t <= y:
+        return None
+    return x, y, r, t
+
+
+def _crop_png_to_nuke_box(png_path, box, plate_w, plate_h):
+    """
+    Crop a written PNG to the Crop node's visible box.
+    Nuke Y is bottom-up; PNG is top-down.
+    """
+    if not box or not png_path or not os.path.isfile(png_path):
+        return False
+    x, y, r, t = box
+    QtGui, _ = _qt_gui()
+    if QtGui is None:
+        return False
+    img = QtGui.QImage(png_path)
+    if img.isNull():
+        return False
+    iw, ih = img.width(), img.height()
+    fw = int(plate_w) if plate_w else iw
+    fh = int(plate_h) if plate_h else ih
+    if fw <= 0 or fh <= 0:
+        fw, fh = iw, ih
+    sx = float(iw) / float(fw)
+    sy = float(ih) / float(fh)
+    qx = int(round(x * sx))
+    qy = int(round((fh - t) * sy))
+    qw = int(round((r - x) * sx))
+    qh = int(round((t - y) * sy))
+    qx = max(0, min(iw - 1, qx))
+    qy = max(0, min(ih - 1, qy))
+    qw = max(1, min(iw - qx, qw))
+    qh = max(1, min(ih - qy, qh))
+    if qw >= iw - 2 and qh >= ih - 2:
+        return False
+    cropped = img.copy(qx, qy, qw, qh)
+    if cropped.isNull() or cropped.width() < 2 or cropped.height() < 2:
+        return False
+    if not cropped.save(png_path, "PNG"):
+        return False
+    _log(
+        "Crop PNG to visible box %sx%s (from %sx%s, nuke box x=%.1f y=%.1f r=%.1f t=%.1f)"
+        % (cropped.width(), cropped.height(), iw, ih, x, y, r, t)
+    )
+    return True
+
+
+def write_visible_frame_png(source_node, frame, out_path):
+    """
+    Write the pixels the selected node actually shows.
+    If that node is Crop (and reformat is off), crop the PNG to the box so
+    Comfy only sees the cropped region — not the full plate.
+    """
+    source_node = resolve_export_node(source_node) or source_node
+    crop_n = source_node if _is_crop_node(source_node) else None
+    plate_w = plate_h = None
+    try:
+        fmt = source_node.format()
+        plate_w, plate_h = int(fmt.width()), int(fmt.height())
+    except Exception:
+        pass
+    if crop_n is not None:
+        try:
+            inp = crop_n.input(0)
+            if inp is not None:
+                fmt = inp.format()
+                plate_w, plate_h = int(fmt.width()), int(fmt.height())
+        except Exception:
+            pass
+        # Prefer Nuke Crop+reformat so Write already emits crop size
+        tmp = None
+        prev_sel = []
+        try:
+            try:
+                prev_sel = [n.name() for n in nuke.selectedNodes()]
+                for n in nuke.selectedNodes():
+                    n.setSelected(False)
+            except Exception:
+                prev_sel = []
+            tmp = nuke.createNode("Crop", inpanel=False)
+            # Crop the original input, not the Crop node itself (avoids
+            # double-crop / wrong box if the artist Crop already reformatted).
+            src_in = crop_n.input(0) if crop_n.input(0) is not None else source_node
+            tmp.setInput(0, src_in)
+            try:
+                tmp.setName("__comfy_tmp_crop_%s" % uuid.uuid4().hex[:8])
+            except Exception:
+                pass
+            box = _crop_box_xyrt(crop_n)
+            if box is not None and "box" in tmp.knobs():
+                try:
+                    tmp["box"].setValue(box)
+                except Exception:
+                    try:
+                        tmp["box"].fromScript(crop_n["box"].toScript())
+                    except Exception:
+                        pass
+            if "reformat" in tmp.knobs():
+                tmp["reformat"].setValue(True)
+            path, cs_set = write_plate_srgb_png(tmp, frame, out_path)
+        finally:
+            if tmp is not None:
+                try:
+                    nuke.delete(tmp)
+                except Exception:
+                    pass
+            if prev_sel:
+                try:
+                    for n in nuke.selectedNodes():
+                        n.setSelected(False)
+                    for name in prev_sel:
+                        n = nuke.toNode(name)
+                        if n is not None:
+                            n.setSelected(True)
+                except Exception:
+                    pass
+        # If Write still produced the full plate, crop the PNG to the box
+        box = _crop_box_xyrt(crop_n)
+        QtGui, _ = _qt_gui()
+        if QtGui is not None and box is not None:
+            img = QtGui.QImage(path)
+            if not img.isNull():
+                bw = int(round(box[2] - box[0]))
+                bh = int(round(box[3] - box[1]))
+                if img.width() > bw + 2 or img.height() > bh + 2:
+                    _crop_png_to_nuke_box(path, box, plate_w, plate_h)
+        return path, cs_set, "nuke_crop_visible"
+
+    path, cs_set = write_plate_srgb_png(source_node, frame, out_path)
+    return path, cs_set, "nuke_visible"
 
 
 def write_tree_rgba_png(source_node, frame, out_path):
@@ -1876,6 +2175,19 @@ def prepare_display_plate(
 
     src_for_write = read_node or fallback_node
 
+    # MOV / EXR sequences: always Nuke-Write the current frame to a still PNG.
+    if _is_movie_or_sequence(read_node, plate_path) and src_for_write is not None:
+        _log(
+            "Write single frame %s from '%s' (MOV/EXR sequence → PNG)"
+            % (frame, src_for_write.name())
+        )
+        path, cs_set = write_plate_srgb_png(src_for_write, frame, TEMP_PLATE_SRGB)
+        _log(
+            "plate_srgb.png ready (%s bytes, write_cs=%s, sequence frame)"
+            % (os.path.getsize(path), cs_set)
+        )
+        return path, "nuke_sequence_frame"
+
     # Fast path: 8-bit display files — always prefer disk load
     if plate_path and os.path.isfile(plate_path):
         ext = os.path.splitext(plate_path)[1].lower()
@@ -2509,26 +2821,31 @@ def run_edit_on_node(
     os.makedirs(out_dir, exist_ok=True)
 
     wf_path = workflow or DEFAULT_WORKFLOW
+    wf_base = os.path.basename(str(wf_path or "")).replace(" ", "_").lower()
+    is_hires = "hi_res" in wf_base or "hires" in wf_base
     # Prefer latest edit workflow on disk (v08); migrate any older name.
-    for old in (
-        "Edit_Image_API.json",
-        "Edit_Image_v01.json",
-        "Edit_Image_v02.json",
-        "Edit_Image_v03.json",
-        "Edit_Image_v04.json",
-        "Edit_Image_v05.json",
-        "Edit_Image_v06.json",
-        "Edit_Image_v07.json",
-    ):
-        if wf_path.endswith(old):
-            newer = os.path.join(REPO_ROOT, "Edit_Image_v08.json")
-            if os.path.isfile(newer):
-                wf_path = newer
-            break
-    # If default path missing, still use v08 name so server pull can fill it.
-    if not os.path.isfile(wf_path) and not str(wf_path).endswith("Edit_Image_v08.json"):
-        cand = os.path.join(REPO_ROOT, "Edit_Image_v08.json")
-        wf_path = cand
+    # Do not migrate Hi-res jobs onto v08.
+    if not is_hires:
+        for old in (
+            "Edit_Image_API.json",
+            "Edit_Image_v01.json",
+            "Edit_Image_v02.json",
+            "Edit_Image_v03.json",
+            "Edit_Image_v04.json",
+            "Edit_Image_v05.json",
+            "Edit_Image_v06.json",
+            "Edit_Image_v07.json",
+        ):
+            if wf_path.endswith(old):
+                newer = os.path.join(REPO_ROOT, "Edit_Image_v08.json")
+                if os.path.isfile(newer):
+                    wf_path = newer
+                break
+    if not os.path.isfile(wf_path):
+        if is_hires:
+            wf_path = _latest_hires_workflow_path()
+        elif not str(wf_path).endswith("Edit_Image_v08.json"):
+            wf_path = os.path.join(REPO_ROOT, "Edit_Image_v08.json")
 
     # Always take the hub's latest graph before this job (not the Nuke cache).
     wf_path = _refresh_workflow_from_server(wf_path)
@@ -2578,8 +2895,39 @@ def run_edit_on_node(
             timeout_sec=600.0,
             poll_interval_sec=2.0,
         )
-        _log("Uploading plate_srgb + mask_luma to Comfy…")
+        _log("Uploading plate_srgb + mask_luma to Comfy...")
+        wf_base = os.path.basename(str(wf_path or "")).replace(" ", "_").lower()
+        is_hires_job = "hi_res" in wf_base or "hires" in wf_base
+        if is_hires_job:
+            if warn_if_hires_down(server):
+                _BG_JOB_ACTIVE = False
+                return
+        else:
+            try:
+                client.ping()
+            except Exception as ping_err:
+                raise RuntimeError(
+                    "Cannot reach ComfyUI at %s\n%s" % (server, ping_err)
+                )
         client.load_workflow()
+        if is_hires_job:
+            data = getattr(client, "_workflow_template", None) or {}
+            if EDIT_HIRES_LOAD in data and EDIT_HIRES_MASK in data:
+                client.id_load = EDIT_HIRES_LOAD
+                client.id_load_mask = EDIT_HIRES_MASK
+                client.id_prompt = EDIT_HIRES_PROMPT
+            elif EDIT_HIRES_LOAD_V01 in data and EDIT_HIRES_MASK_V01 in data:
+                client.id_load = EDIT_HIRES_LOAD_V01
+                client.id_load_mask = EDIT_HIRES_MASK_V01
+                client.id_prompt = EDIT_HIRES_PROMPT_V01
+            else:
+                client.id_load = EDIT_HIRES_LOAD
+                client.id_load_mask = EDIT_HIRES_MASK
+                client.id_prompt = EDIT_HIRES_PROMPT
+            client.id_prompt_key = "value"
+            _log("Hi-res inject: plate=%s mask=%s prompt=%s" % (
+                client.id_load, client.id_load_mask, client.id_prompt
+            ))
         import time as _time
         import socket as _socket
 
@@ -3161,7 +3509,17 @@ def schedule_edit(
     _schedule_ms(50 if _attempt == 0 else 250, _job)
 
 
-def show_panel(initial_prompt=None):
+def show_hires_panel(initial_prompt=None):
+    """Edit Image Hi-res → 192.168.91.12:8166 (v02 nodes 164 / 167 / 161)."""
+    if nuke is None:
+        raise RuntimeError("Must run inside Nuke")
+    server = resolve_server_for_workflow(EDIT_HIRES_WORKFLOW, fallback=DEFAULT_SERVER)
+    if warn_if_hires_down(server):
+        return
+    show_panel(initial_prompt=initial_prompt, workflow=EDIT_HIRES_WORKFLOW)
+
+
+def show_panel(initial_prompt=None, workflow=None):
     """Open Edit Image panel. Optional initial_prompt pre-fills the prompt field."""
     if nuke is None:
         raise RuntimeError("Must run inside Nuke")
@@ -3171,15 +3529,19 @@ def show_panel(initial_prompt=None):
     start_prompt = (
         str(initial_prompt).strip() if initial_prompt else DEFAULT_EDIT_PROMPT
     )
+    start_wf = workflow or DEFAULT_WORKFLOW
+    hires = "hi_res" in os.path.basename(str(start_wf)).lower() or "hires" in os.path.basename(str(start_wf)).lower()
 
     class ComfyEditPanel(nukescripts.PythonPanel):
         def __init__(self, prompt_text):
-            nukescripts.PythonPanel.__init__(self, "Pix-Edit Image")
+            nukescripts.PythonPanel.__init__(
+                self, "Pix-Edit Image Hi-res" if hires else "Pix-Edit Image"
+            )
             self.server = nuke.String_Knob("server", "Server")
             self.workflow = nuke.File_Knob("workflow", "Workflow")
-            self.workflow.setValue(DEFAULT_WORKFLOW)
+            self.workflow.setValue(start_wf)
             self.server.setValue(
-                resolve_server_for_workflow(DEFAULT_WORKFLOW, fallback=DEFAULT_SERVER)
+                resolve_server_for_workflow(start_wf, fallback=DEFAULT_SERVER)
             )
             self.prompt = nuke.Multiline_Eval_String_Knob("prompt", "Prompt")
             self.prompt.setValue(prompt_text)
@@ -3190,16 +3552,23 @@ def show_panel(initial_prompt=None):
             self.use_random_seed.setFlag(nuke.STARTLINE)
             self.out_dir = nuke.String_Knob("output_dir", "Output dir")
             self.out_dir.setValue(DEFAULT_OUT)
+            help_hires = (
+                "<b>Hi-res v02</b>: plate_srgb → node <b>164</b>, "
+                "mask_luma → <b>167</b>, user text → <b>161</b> "
+                "on 192.168.91.12:8166.<br>"
+                "If that box is down, a popup tells you to use Edit Image instead.<br>"
+                "<b>RotoPaint</b> is baked into the plate.<br>"
+                "Select the last node. Read only = full-frame."
+            )
+            help_v08 = (
+                "<b>Roto1</b> = masked edit (plate 80, mask 123).<br>"
+                "<b>RotoPaint</b> is baked into the plate.<br>"
+                "Select the last node. Read only = full-frame."
+            )
             self.help_txt = nuke.Text_Knob(
                 "help_txt",
                 "",
-                "<b>Roto1</b> = edit masked region only "
-                "(plate → LoadImage 80, mask_luma → LoadImage 123).<br>"
-                "<b>RotoPaint</b> strokes are baked into the plate (with or without Roto).<br>"
-                "Select the <b>last node</b> in the tree.<br>"
-                "<b>Read1 only</b> (no Roto) = full-frame edit.<br>"
-                "Edit prompt before OK. "
-                "Library: Pix-Edit → Prompt Examples… (copy/paste).",
+                help_hires if hires else help_v08,
             )
             for k in (
                 self.server,
@@ -3848,6 +4217,10 @@ def export_frame_for_i2v(node, frame):
         force_tree = force_tree or (source.Class() != "Read")
     except Exception:
         pass
+    # Movies / EXR sequences: always write this timeline frame as a still PNG.
+    if _is_movie_or_sequence(read, plate_src):
+        force_tree = True
+        _log("I2V/Describe: sequence or movie — writing single frame %s" % frame)
     plate_png, method = prepare_display_plate(
         read,
         plate_src,
@@ -3863,6 +4236,38 @@ def export_frame_for_i2v(node, frame):
         % (TEMP_I2V_FRAME, os.path.getsize(TEMP_I2V_FRAME), method)
     )
     return TEMP_I2V_FRAME, method
+
+
+def export_frame_for_describe(node, frame):
+    """
+    Image Description plate: whatever the selected node shows at this frame.
+    Crop selected -> only the cropped pixels are written and uploaded.
+    MOV/EXR sequences -> single still PNG of this frame.
+    """
+    import shutil
+
+    _ensure_temp_dir()
+    node = resolve_export_node(node) or node
+    read = find_upstream_read(node)
+    _log(
+        "Describe export frame %s from %s class=%s (read=%s crop=%s)"
+        % (
+            frame,
+            node.name() if node is not None else "?",
+            node.Class() if node is not None else "?",
+            read.name() if read else "None",
+            "yes" if _is_crop_node(node) else "no",
+        )
+    )
+    path, cs_set, method = write_visible_frame_png(node, frame, TEMP_I2V_FRAME)
+    if os.path.abspath(path) != os.path.abspath(TEMP_I2V_FRAME):
+        shutil.copy2(path, TEMP_I2V_FRAME)
+        path = TEMP_I2V_FRAME
+    _log(
+        "Describe frame ready: %s (%s bytes, method=%s, write_cs=%s)"
+        % (path, os.path.getsize(path), method, cs_set)
+    )
+    return path, method
 
 
 def schedule_image_to_video(
@@ -4114,7 +4519,10 @@ def schedule_image_description(
     if node is None:
         nodes = nuke.selectedNodes()
         if not nodes:
-            nuke.message("Select a node first (Read, Merge, RotoPaint, or Roto).")
+            nuke.message(
+                "Select a node first (Read, Crop, Merge, RotoPaint, or Roto).\n"
+                "If a Crop is selected, only the cropped region is described."
+            )
             return
         node = nodes[0]
     if isinstance(node, str):
@@ -4155,8 +4563,11 @@ def schedule_image_description(
         import time as _time
         import socket as _socket
 
-        _log("Describe — export frame %s from %s" % (frame, node.name()))
-        in_path, method = export_frame_for_i2v(node, frame)
+        _log(
+            "Describe — export visible frame %s from %s (Crop = cropped pixels only)"
+            % (frame, node.name())
+        )
+        in_path, method = export_frame_for_describe(node, frame)
         host = _socket.gethostname().replace(" ", "_")
         stamp = "desc_%s_%s" % (
             _time.strftime("%Y%m%d_%H%M%S"),
@@ -4237,9 +4648,13 @@ def show_image_description_panel():
     sel = nuke.selectedNodes()
     node = sel[0] if sel else None
     if node is None:
-        nuke.message("Select a node first (Read, Merge, or Roto).")
+        nuke.message(
+            "Select a node first (Read, Crop, Merge, or Roto).\n"
+            "Select Crop to describe only what that Crop shows."
+        )
         return
     frame = int(nuke.frame())
+    crop_sel = _is_crop_node(node)
 
     class ImageDescPanel(nukescripts.PythonPanel):
         def __init__(self):
@@ -4253,13 +4668,21 @@ def show_image_description_panel():
                 )
             )
             self.prompt = nuke.Multiline_Eval_String_Knob("prompt", "Prompt")
-            self.prompt.setValue(IMAGE_DESC_DEFAULT_PROMPT)
+            start_p = IMAGE_DESC_DEFAULT_PROMPT
+            if crop_sel:
+                start_p = (
+                    "Describe only this cropped region. Ignore anything outside "
+                    "this frame. Then provide a concise edit prompt to remove the ( )"
+                )
+            self.prompt.setValue(start_p)
             self.help_txt = nuke.Text_Knob(
                 "help_txt",
                 "",
-                "Selected frame → LoadImage <b>5</b>.<br>"
-                "Your text → node <b>4</b>. Preview as Text node <b>12</b> "
-                "is written into a StickyNote <b>label</b> (10 words/line).",
+                "Select <b>Crop</b> to describe <b>only the cropped pixels</b> "
+                "(what the Crop viewer shows).<br>"
+                "MOV / EXR: current frame is written as a still PNG.<br>"
+                "Image → LoadImage <b>5</b>. Your text → node <b>4</b>. "
+                "Result → StickyNote next to the selected node.",
             )
             for k in (self.server, self.workflow, self.prompt, self.help_txt):
                 self.addKnob(k)
@@ -4289,6 +4712,7 @@ def register_menu():
             pass
     m = menubar.addMenu(MENU_NAME)
     m.addCommand("Edit Image...", show_panel)
+    m.addCommand("Edit Image Hi-res...", show_hires_panel)
     m.addCommand("Image Gen...", show_image_gen_panel)
     m.addCommand("Image Description...", show_image_description_panel)
     m.addCommand("Image to Video...", show_image_to_video_panel)
@@ -4296,7 +4720,7 @@ def register_menu():
     m.addCommand("Prompt Examples...", show_prompt_examples_panel)
 
     nuke.tprint(
-        "[Pix-Edit] Menu OK — Edit Image / Gen / Describe / I2V / Ping | "
+        "[Pix-Edit] Menu OK — Edit / Hi-res / Gen / Describe / I2V / Ping | "
         "server=%s root=%s workflow=%s"
         % (DEFAULT_SERVER, REPO_ROOT, os.path.basename(DEFAULT_WORKFLOW))
     )

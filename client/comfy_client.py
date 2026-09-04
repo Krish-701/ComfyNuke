@@ -25,9 +25,15 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 # Fallback node IDs (Edit_Image_v08.json). Auto-discovered when possible.
-NODE_LOAD_IMAGE = "80"  # plate_srgb.png
-NODE_LOAD_MASK = "123"  # mask_luma.png
-NODE_PROMPT = "109"  # PrimitiveStringMultiline "Input Text" → LLM.user_prompt_input
+NODE_LOAD_IMAGE = "80"  # plate_srgb.png (Edit_Image_v08)
+NODE_LOAD_MASK = "123"  # mask_luma.png (Edit_Image_v08)
+NODE_PROMPT = "109"  # PrimitiveStringMultiline (v08)
+NODE_HIRES_LOAD = "164"  # plate_srgb (Edit_Image_Hi_res_v02)
+NODE_HIRES_MASK = "167"  # mask_luma
+NODE_HIRES_PROMPT = "161"  # PrimitiveStringMultiline user input
+NODE_HIRES_LOAD_V01 = "278"
+NODE_HIRES_MASK_V01 = "297"
+NODE_HIRES_PROMPT_V01 = "290"
 NODE_SEED = "242"  # Seed (rgthree) — may differ; auto-discovered
 NODE_SAVE = "121"
 
@@ -228,6 +234,9 @@ class ComfyClient:
         repo = here.parent
         for name in (
             "Edit_Image_v08.json",
+            "Edit_Image_Hi_res_v02.json",
+            "Edit_Image_Hi_res_v01.json",
+            "Edit_Image_Hi_res.json",
             "Edit_Image_v07.json",
             "Edit_Image_v06.json",
             "Edit_Image_v05.json",
@@ -321,9 +330,24 @@ class ComfyClient:
         # Older graphs: single LoadImage (RGBA with alpha)
         self.id_load, self.id_load_mask = self._resolve_load_image_nodes(data)
 
-        # User prompt: LLM user field (v04) or CLIP text string (v03)
-        # Prefer fixed v08 node 109 when present (user edit text)
+        # User prompt: Hi-res v02 161, v01 290, then v08 109, else auto-discover
         if (
+            NODE_HIRES_PROMPT in data
+            and isinstance(data.get(NODE_HIRES_PROMPT), dict)
+            and data[NODE_HIRES_PROMPT].get("class_type") == "PrimitiveStringMultiline"
+            and isinstance((data[NODE_HIRES_PROMPT].get("inputs") or {}).get("value"), str)
+        ):
+            self.id_prompt = NODE_HIRES_PROMPT
+            self.id_prompt_key = "value"
+        elif (
+            NODE_HIRES_PROMPT_V01 in data
+            and isinstance(data.get(NODE_HIRES_PROMPT_V01), dict)
+            and data[NODE_HIRES_PROMPT_V01].get("class_type") == "PrimitiveStringMultiline"
+            and isinstance((data[NODE_HIRES_PROMPT_V01].get("inputs") or {}).get("value"), str)
+        ):
+            self.id_prompt = NODE_HIRES_PROMPT_V01
+            self.id_prompt_key = "value"
+        elif (
             NODE_PROMPT in data
             and isinstance(data.get(NODE_PROMPT), dict)
             and data[NODE_PROMPT].get("class_type") == "PrimitiveStringMultiline"
@@ -439,6 +463,13 @@ class ComfyClient:
         load_ids = _find_all_node_ids(data, "LoadImage")
         if not load_ids:
             return None, None
+
+        # Hi-res v02: 164 plate_srgb, 167 mask_luma
+        if NODE_HIRES_LOAD in load_ids and NODE_HIRES_MASK in load_ids:
+            return NODE_HIRES_LOAD, NODE_HIRES_MASK
+        # Hi-res v01: 278 / 297
+        if NODE_HIRES_LOAD_V01 in load_ids and NODE_HIRES_MASK_V01 in load_ids:
+            return NODE_HIRES_LOAD_V01, NODE_HIRES_MASK_V01
 
         # Fixed v08 ids when present
         plate = NODE_LOAD_IMAGE if NODE_LOAD_IMAGE in data and NODE_LOAD_IMAGE in load_ids else None
@@ -656,9 +687,11 @@ class ComfyClient:
                 if plain_key in inp and isinstance(inp.get(plain_key), str):
                     inp[plain_key] = ""
 
+        # Seed (rgthree) max is 2**50 (1125899906842624). 2**63 overflows.
+        seed_max = 1125899906842624
         if seed is None:
-            seed = int(uuid.uuid4().int % (2**63))
-        seed_val = int(seed) % (2**63)
+            seed = int(uuid.uuid4().int % seed_max)
+        seed_val = abs(int(seed)) % seed_max
         if self.id_seed and self.id_seed in wf:
             _set(self.id_seed, self.id_seed_key, seed_val, required=False)
 

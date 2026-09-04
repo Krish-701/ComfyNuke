@@ -54,6 +54,9 @@ _SYNC_FILES = (
     "nuke/launch.py",
     "client/comfy_client.py",
     "Edit_Image_v08.json",
+    "Edit_Image_Hi_res_v02.json",
+    "Edit_Image_Hi_res_v01.json",
+    "Edit_Image_Hi_res.json",
     "Image_generation_v01.json",
     "Image_Description_v01.json",
     "video_minimax_h3_i2v.json",
@@ -62,7 +65,14 @@ _SYNC_FILES = (
     "workflow_routes.json",
 )
 
-_OPTIONAL = frozenset(["studio_config.json", "workflow_routes.json"])
+# Older hi-res aliases — do not abort bootstrap if the hub allow-list is stale.
+_OPTIONAL = frozenset(
+    [
+        "studio_config.json",
+        "workflow_routes.json",
+        "Edit_Image_Hi_res_v01.json",
+    ]
+)
 # Always re-download these from the hub on every Nuke launch (never keep stale
 # artist-cache copies after the server graph/scripts are edited).
 _ALWAYS_REFRESH = frozenset(
@@ -70,6 +80,9 @@ _ALWAYS_REFRESH = frozenset(
         "nuke/ComfyEdit.py",
         "client/comfy_client.py",
         "Edit_Image_v08.json",
+        "Edit_Image_Hi_res_v02.json",
+        "Edit_Image_Hi_res_v01.json",
+        "Edit_Image_Hi_res.json",
         "Image_generation_v01.json",
         "Image_Description_v01.json",
         "video_minimax_h3_i2v.json",
@@ -275,7 +288,7 @@ def _sync_from_server(base_url, cache, server_manifest, force_all=False):
             _write_file(dest, data)
             updated.append(rel)
             why = "forced workflow refresh" if always else "stale/missing"
-            _log("updated %s (%s bytes) ← server [%s]" % (rel, len(data), why))
+            _log("updated %s (%s bytes) <- server [%s]" % (rel, len(data), why))
         except Exception as e:
             if optional:
                 missing_optional.append(rel)
@@ -350,7 +363,7 @@ def bootstrap():
         _log("version matches server — verifying files…")
     elif local_ver and local_ver != server_ver:
         _log(
-            "OUTDATED cache %s → replacing with server %s (code + workflows)"
+            "OUTDATED cache %s -> replacing with server %s (code + workflows)"
             % (local_ver, server_ver)
         )
     else:
@@ -410,11 +423,12 @@ def bootstrap():
     _log("  out:     %s" % getattr(ComfyEdit, "DEFAULT_OUT", ""))
     _log("  workflows (from server when outdated):")
     _log("    edit:  %s" % getattr(ComfyEdit, "DEFAULT_WORKFLOW", ""))
+    _log("    hires: %s" % getattr(ComfyEdit, "EDIT_HIRES_WORKFLOW", ""))
     _log("    gen:   %s" % getattr(ComfyEdit, "IMAGE_GEN_WORKFLOW", ""))
     _log("    desc:  %s" % getattr(ComfyEdit, "IMAGE_DESC_WORKFLOW", ""))
     _log("    i2v:   %s" % getattr(ComfyEdit, "I2V_WORKFLOW", ""))
     _log("  Menu: Nuke > Pix-Edit")
-    _log("    Edit Image | Image Gen | Image Description | Image to Video | Ping")
+    _log("    Edit Image | Edit Image Hi-res | Image Gen | Image Description | Image to Video | Ping")
     _log("  Jobs share one ComfyUI queue on the Ubuntu GPU.")
     _log("=" * 56)
     return ComfyEdit

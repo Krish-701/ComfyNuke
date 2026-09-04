@@ -71,6 +71,10 @@ ALLOWED_PREFIXES = (
     "client/",
     "docs/",
     "Edit_Image_v08.json",
+    "Edit_Image_Hi_res.json",
+    "Edit_Image_Hi_res_v02.json",
+    "Edit_Image_Hi_res_v01.json",
+    "Edit Image Hi_res.json",
     "Edit_Image_v07.json",
     "Edit_Image_v06.json",
     "Edit_Image_v05.json",
@@ -86,6 +90,31 @@ ALLOWED_PREFIXES = (
     ".gitignore",
 )
 
+# Root-level workflow JSON names that may be added without editing this tuple.
+_WORKFLOW_NAME_PREFIXES = (
+    "Edit_Image",
+    "Image_generation",
+    "Image_Description",
+    "video_",
+)
+
+
+def _rel_is_allowed(rel_posix: str) -> bool:
+    if rel_posix in SYNC_FILES or rel_posix in ALLOWED_PREFIXES:
+        return True
+    for pref in ALLOWED_PREFIXES:
+        if pref.endswith("/") and (rel_posix.startswith(pref) or rel_posix + "/" == pref):
+            return True
+        if rel_posix == pref:
+            return True
+    if "/" in rel_posix or not rel_posix.endswith(".json"):
+        return False
+    name = rel_posix
+    for pfx in _WORKFLOW_NAME_PREFIXES:
+        if name.startswith(pfx) or name.startswith(pfx.replace("_", " ")):
+            return True
+    return False
+
 # Files artists must stay in sync with (workflows + Nuke client code).
 # Keep in lockstep with nuke/remote_bootstrap.py _SYNC_FILES.
 SYNC_FILES = (
@@ -93,6 +122,9 @@ SYNC_FILES = (
     "nuke/launch.py",
     "client/comfy_client.py",
     "Edit_Image_v08.json",
+    "Edit_Image_Hi_res.json",
+    "Edit_Image_Hi_res_v02.json",
+    "Edit_Image_Hi_res_v01.json",
     "Image_generation_v01.json",
     "Image_Description_v01.json",
     "video_minimax_h3_i2v.json",
@@ -346,16 +378,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             if bad in rel_posix.split("/") or rel_posix.startswith(bad):
                 return str(root / ".forbidden")
 
-        allowed = False
-        for pref in ALLOWED_PREFIXES:
-            if pref.endswith("/"):
-                if rel_posix.startswith(pref) or rel_posix + "/" == pref:
-                    allowed = True
-                    break
-            elif rel_posix == pref:
-                allowed = True
-                break
-        if not allowed:
+        if not _rel_is_allowed(rel_posix):
             return str(root / ".forbidden")
 
         return str(candidate)
@@ -512,11 +535,28 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                     (loc.tm_year, loc.tm_mon, loc.tm_mday, 0, 0, 0, 0, 0, -1)
                 )
                 until = now
+            elif rng in ("yesterday", "yday"):
+                loc = time.localtime(now - 24 * 3600)
+                since = time.mktime(
+                    (loc.tm_year, loc.tm_mon, loc.tm_mday, 0, 0, 0, 0, 0, -1)
+                )
+                until = time.mktime(
+                    (loc.tm_year, loc.tm_mon, loc.tm_mday, 23, 59, 59, 0, 0, -1)
+                )
             elif rng in ("24h", "last24", "last_24_hour", "last_24_hours"):
                 since = now - 24 * 3600
                 until = now
+            elif rng in ("7d", "7days", "last7", "last_7_days"):
+                since = now - 7 * 24 * 3600
+                until = now
             elif rng in ("30d", "30days", "last30", "last_30_days"):
                 since = now - 30 * 24 * 3600
+                until = now
+            elif rng in ("month", "this_month"):
+                loc = time.localtime(now)
+                since = time.mktime(
+                    (loc.tm_year, loc.tm_mon, 1, 0, 0, 0, 0, 0, -1)
+                )
                 until = now
             # date-only `to` → end of that day
             to_raw = _one("to") or _one("until")
@@ -571,6 +611,18 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 payload["range"] = rng or "custom"
                 payload["since"] = since
                 payload["until"] = until
+                payload["since_iso"] = (
+                    time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(since))
+                    if since
+                    else ""
+                )
+                payload["until_iso"] = (
+                    time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(until))
+                    if until
+                    else ""
+                )
+                payload["from_date"] = payload["since_iso"][:10] if since else ""
+                payload["to_date"] = payload["until_iso"][:10] if until else ""
                 self._send_json(payload)
                 return True
 
@@ -1020,6 +1072,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
         raw_path = parsed.path
         cfg = load_routes(self._repo_root())
         upstream = default_upstream(cfg, self.comfy_upstream)
+        api_key = ""
         path = raw_path
         if path == "/comfyui-r" or path.startswith("/comfyui-r/"):
             rest = path[len("/comfyui-r") :].lstrip("/")
@@ -1035,6 +1088,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 )
                 return
             upstream = str(srv.get("url") or "").rstrip("/")
+            api_key = str(srv.get("api_key") or srv.get("token") or "").strip()
         elif path == "/comfyui":
             path = "/"
         elif path.startswith("/comfyui/"):
@@ -1051,9 +1105,11 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
         body = self.rfile.read(length) if length > 0 else None
 
         headers = {}
-        for k in ("Content-Type", "Accept", "User-Agent"):
+        for k in ("Content-Type", "Accept", "User-Agent", "Authorization"):
             if self.headers.get(k):
                 headers[k] = self.headers.get(k)
+        if api_key and "Authorization" not in headers:
+            headers["Authorization"] = "Bearer " + api_key
         t0 = time.time()
         req = urllib.request.Request(target, data=body, headers=headers, method=method)
         try:
@@ -1094,9 +1150,17 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
         except Exception as e:
-            msg = ("ComfyUI proxy error: %s\nupstream=%s\n" % (e, target)).encode(
-                "utf-8"
-            )
+            hint = ""
+            err_s = str(e)
+            if "111" in err_s or "Connection refused" in err_s:
+                hint = (
+                    "\nHi-res/upstream ComfyUI is not listening on that host:port.\n"
+                    "On 192.168.91.12 the live API is :8188 (not :8166).\n"
+                    "Start ComfyUI there, or change Workflow servers in /admin.\n"
+                )
+            msg = (
+                "ComfyUI proxy error: %s\nupstream=%s\n%s" % (e, target, hint)
+            ).encode("utf-8")
             self._log_comfy_traffic(
                 method=method,
                 path=path,

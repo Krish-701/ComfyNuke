@@ -1,6 +1,6 @@
 # ComfyNuke studio playbook — hub `192.168.91.11`
 
-Handoff for a later session (human or agent). Facts below were verified on this Ubuntu GPU box on **2026-08-20**. If reality disagrees, re-check the live commands in §8 before changing routing, node IDs, or start scripts.
+Handoff for a later session (human or agent). Hub facts were first verified **2026-08-20**; this file was aligned again **2026-09-04** (Hi-res v01, Image Description crop, usage-log dates, `:8600` workflow allow-list). If reality disagrees, re-check the live commands in §8 before changing routing, node IDs, or start scripts.
 
 Nuke artists use **HTTP only**. No Samba, no SSH, no share for code.
 
@@ -9,10 +9,11 @@ Nuke artists use **HTTP only**. No Samba, no SSH, no share for code.
 ## 0. Read first
 
 1. **This hub is `192.168.91.11`.** Older docs still say `192.168.91.13` — ignore that IP on this machine.
-2. **Do not send Edit Image to `:8188`.** `Edit_Image_v08.json` needs WAS Node Suite (`Text Multiline`, `Mask Invert`), which exists only on **`:8166`**. Routing Edit to `:8188` fails with `missing_node_type` on node **113** even when the artist prompt injected correctly into node **109**.
+2. **Do not send Edit Image to `:8188`.** `Edit_Image_v08.json` needs WAS Node Suite (`Text Multiline`, `Mask Invert`), which exists only on **this hub’s `:8166`**. Routing Edit to `:8188` fails with `missing_node_type` on node **113** even when the artist prompt injected correctly into node **109**.
+2b. **Hi-res v02 runs on `192.168.91.12:8166`.** Route id **`8166-12`**. Inject: plate **164**, mask **167**, prompt **161.value**. If that box is down, Nuke pops: *Edit Image Hi-res is down — use Edit Image instead.* Do not fail over silently.
 3. **Do not run `start-comfyui-production.sh --port 8188`.** That script `pgrep`s `Comfyui-production/main.py` and will **SIGTERM the existing `:8177` instance**. Start `:8188` with the manual command in §2.3.
 4. **Do not `kill -9` CUDA processes** on this vGPU/MIG guest. Prefer SIGTERM. Hard-kill can leave the GPU `busy or unavailable` until a full VM power cycle.
-5. **Do not invent workflow node IDs.** Re-discover with `ComfyClient.load_workflow()` on the JSON on disk. Current Edit inject (this repo, 2026-08-20): plate **80**, mask **123**, prompt **109.value**, seed **11.value**.
+5. **Do not invent workflow node IDs.** Re-discover with `ComfyClient.load_workflow()` on the JSON on disk. Current inject (this repo, 2026-09-04): Edit v08 plate **80**, mask **123**, prompt **109.value**; Hi-res v02 plate **164**, mask **167**, prompt **161.value**; Image Description LoadImage **5**, user text **4**, PreviewAny **12**.
 6. **Do not commit** `studio_config.json` or `server/access_control.json`.
 
 ---
@@ -38,17 +39,19 @@ Both path spellings work. Prefer the symlink in commands so they match systemd.
 | Port | Process | Tree / conda | Who uses it |
 |------|---------|--------------|-------------|
 | **8600** | `serve_code.py` (read-only GET + ACL + Comfy proxy) | repo `server/` · system `python3` | Nuke bootstrap, admin, `/comfyui` proxy |
-| **8166** | ComfyUI **Edit** | `Comfyui-Image-edit` · env `Comfyui-edit` | `Edit_Image_v08.json` |
-| **8177** | ComfyUI **Production** | `Comfyui-production` · env `Comfyui-production` | `Image_generation_v01.json` |
+| **8166** | ComfyUI **Edit** (this hub) | `Comfyui-Image-edit` · env `Comfyui-edit` | `Edit_Image_v08.json` |
+| **91.12:8166** | ComfyUI **Hi-res** | other box | `Edit_Image_Hi_res_v02.json` |
+| **8177** | ComfyUI **Production** | `Comfyui-production` · env `Comfyui-production` | `Image_generation_v01.json`, `Image_Description_v01.json` |
 | **8188** | ComfyUI extra listener (same production tree, **own SQLite DB**) | `Comfyui-production` · env `Comfyui-production` | default `/comfyui` proxy, Ping, browser |
 
 Artists should **not** point Nuke at raw `:8188` / `:8166` / `:8177`. Jobs go through `:8600` so ACL and per-workflow routing apply:
 
 ```
 Nuke  ──GET :8600──►  scripts + workflows + ACL
-      ──:8600/comfyui        ──►  127.0.0.1:8188   (default)
-      ──:8600/comfyui-r/8166 ──►  127.0.0.1:8166   (Edit Image)
-      ──:8600/comfyui-r/8177 ──►  127.0.0.1:8177   (Image Gen)
+      ──:8600/comfyui            ──►  127.0.0.1:8188          (default)
+      ──:8600/comfyui-r/8166     ──►  127.0.0.1:8166          (Edit Image v08)
+      ──:8600/comfyui-r/8166-12  ──►  192.168.91.12:8166      (Edit Image Hi-res)
+      ──:8600/comfyui-r/8177     ──►  127.0.0.1:8177          (Image Gen + Description)
 
 Browser  ──:8166 / :8177 / :8188──►  ComfyUI UI (not IP-gated)
 Admin    ──:8600/admin──►  login
@@ -84,8 +87,9 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
-After editing `serve_code.py` / `access_control.py`: `sudo systemctl restart comfynuke-code.service`.  
-`workflow_routes.json`, `studio_config.json`, and admin HTML are read live — no restart.
+After editing `serve_code.py` / `access_control.py`: restart `:8600` (systemd below, or the live `python3 server/serve_code.py` process if the unit is inactive).  
+**New workflow JSON filenames** are 403 until `:8600` is restarted *or* the name matches `Edit_Image*`, `Image_*`, `video_*` in `_rel_is_allowed` (added 2026-09-04).  
+`workflow_routes.json`, `studio_config.json`, and `server/admin_ui.html` are read live — no restart.
 
 **Check:** `curl -sS http://127.0.0.1:8600/health` → `ComfyNuke code server OK`.
 
@@ -178,8 +182,12 @@ Live table: `workflow_routes.json` (mirrored into gitignored `studio_config.json
 
 | Workflow | Server id | Upstream | Why |
 |----------|-----------|----------|-----|
-| `Edit_Image_v08.json` | `8166` | `http://127.0.0.1:8166` | WAS Node Suite (`was-ns`) on the **edit** tree only |
+| `Edit_Image_v08.json` | `8166` | `http://127.0.0.1:8166` | WAS Node Suite (`was-ns`) on this hub’s **edit** tree |
+| `Edit_Image_Hi_res_v02.json` | `8166-12` | `http://192.168.91.12:8166` | Hi-res v02 (plate 164 / mask 167 / prompt 161) |
+| `Edit_Image_Hi_res.json` | `8166-12` | same | alias of v02 |
+| `Edit_Image_Hi_res_v01.json` | `8166-12` | same | legacy hi-res |
 | `Image_generation_v01.json` | `8177` | `http://127.0.0.1:8177` | production gen |
+| `Image_Description_v01.json` | `8177` | `http://127.0.0.1:8177` | Ollama describe (nodes 4 / 5 / 12) |
 | *(unassigned / default)* | `main` | `http://127.0.0.1:8188` | `/comfyui` proxy |
 
 **Edit Image log you want:**
@@ -216,10 +224,17 @@ exec(__import__('urllib.request').request.urlopen('http://192.168.91.11:8600/nuk
 
 Copy from `nuke/artist_one_liner.txt`. Re-run after a server `git pull`.
 
-Menu **Nuke → Pix-Edit**: Edit Image… | Image Gen… | Image to Video… | Ping Server.
+Menu **Nuke → Pix-Edit**: Edit Image… | Edit Image Hi-res… | Image Gen… | Image Description… | Image to Video… | Ping Server.
 
 Cache on the artist PC: `~/.comfynuke/cache/` (Windows: `%USERPROFILE%\.comfynuke\cache\`).  
 Outputs: `~/ComfyNuke_out/<hostname>/` on the **artist** machine, not the hub.
+
+Each job re-downloads the named workflow JSON from `:8600` (`_refresh_workflow_from_server`) so artists do not keep a stale graph after a hub update. Bootstrap `_ALWAYS_REFRESH` also overwrites those JSONs (v02 + alias). `Edit_Image_Hi_res_v01.json` is **optional** in bootstrap.
+
+### 4.0 Plates, MOV/EXR, Crop (Image Description)
+
+- **MOV / EXR sequences:** Nuke writes the **current timeline frame** to a still PNG, then uploads that PNG. Do not send the `.mov` or the sequence to Comfy `LoadImage`.
+- **Image Description + Crop:** select the **Crop** node. Only the cropped pixels are written/uploaded (LoadImage **5**). The StickyNote is the description of that crop only. Without Crop, the selected node’s full visible frame is used.
 
 ### 4.1 Access control
 
@@ -232,16 +247,33 @@ Hub IP `192.168.91.11` is allow-listed as `hub-91.11`. Localhost is allowed.
 
 Do not put passwords in git. Live file: `server/access_control.json` (mode 600).
 
-### 4.2 Inject cheatsheet (this repo, 2026-08-20)
+### 4.2 Inject cheatsheet (this repo, 2026-09-04)
 
 ```
-Edit_Image_v08.json
-  LoadImage plate 80 | LoadImage mask 123 | prompt 109 value | seed 11 value
-  WAS-only: 113 Text Multiline, 132 Mask Invert  → must run on :8166
+Edit_Image_v08.json          → :8166 (this hub)
+  LoadImage plate 80 | LoadImage mask 123 | prompt 109 value
+  WAS-only: 113 Text Multiline, 132 Mask Invert
 
-Image_generation_v01.json
-  no LoadImage | prompt 73 value | SaveImage 29  → :8177
+Edit_Image_Hi_res_v02.json   → 192.168.91.12:8166  (id 8166-12)
+  LoadImage plate 164 | LoadImage mask 167 | prompt 161 value
+  alias file: Edit_Image_Hi_res.json
+  (v01 leftover: 278 / 297 / 290)
+
+Image_generation_v01.json    → :8177
+  no LoadImage | prompt 73 value | SaveImage 29
+
+Image_Description_v01.json   → :8177
+  user text 4 value | LoadImage 5 | PreviewAny 12 → StickyNote in Nuke
 ```
+
+### 4.3 Admin — usage logs date range
+
+http://192.168.91.11:8600/admin → **Usage logs** (hard-refresh after HTML changes).
+
+- **From date** / **To date** are calendar pickers. Tables and CSV use that window only.
+- Presets fill the pickers: Today, Yesterday, Last 7 days, Last 30 days, This month, Last 24 hours.
+- **Apply dates** (or changing either picker) reloads summary + events.
+- The chip under the bar shows the selected range (e.g. `Today  4 Sep 2026 → 4 Sep 2026`).
 
 ---
 
@@ -271,7 +303,7 @@ sudo ufw status numbered | grep -E '8600|8188|8166|8177'
 | `server/usage_logs.jsonl` | **ignored** | usage log |
 | `nuke/remote_bootstrap.py` | tracked | Artist one-liner default `CODE_BASE` = `http://192.168.91.11:8600` |
 
-`:8600` is GET-only for code. Allow-list is in `server/serve_code.py` (`nuke/`, `client/`, workflow JSONs, `studio_config.json`, …). `access_control.json` is blocked.
+`:8600` is GET-only for code. Allow-list is `server/serve_code.py` (`nuke/`, `client/`, `SYNC_FILES`, plus root JSON whose name starts with `Edit_Image`, `Image_generation`, `Image_Description`, or `video_`). `access_control.json` is blocked. A filename that is **not** allowed is served as HTTP **403** (do not confuse with ACL 403).
 
 ---
 
@@ -285,7 +317,7 @@ sudo ufw status numbered | grep -E '8600|8188|8166|8177'
 | SIGTERM | `kill -9` on Comfy/CUDA |
 | Jobs via `:8600/comfyui` or `/comfyui-r/<id>` | Raw `:8188` in Nuke if you want ACL |
 | `--database-url` for `:8188` | Share `user/comfyui.db` with `:8177` |
-| Re-discover node IDs from JSON | Copy stale PLAYBOOK appendix IDs (`278` / `289`) |
+| Re-discover node IDs from JSON | Guess IDs. Hi-res v02 is **164 / 167 / 161**; v01 leftover is 278 / 297 / 290 |
 
 Other:
 
@@ -293,6 +325,9 @@ Other:
 - Two ComfyUI processes can share the production **tree**, but not the SQLite DB.
 - ACL ON + missing artist IP = bootstrap 403. Health (`/health`) stays public.
 - `favicon.ico` 403 on `:8600` is expected (not allow-listed).
+- Bootstrap `HTTP Error 403: Forbidden` on a new `Edit_Image_Hi_res_v0N.json` means the **code server process** still has an old allow-list. Restart `:8600`. v01 is optional so a leftover 403 must not abort bootstrap.
+- Empty `allowed_workflows: []` on an IP **denies every workflow JSON**. Use `null` for “all”.
+- Nuke Script Editor may garble UTF-8 arrows; bootstrap logs use ASCII `->`.
 - i2v MiniMax node is not installed on 8166/8177/8188 as of 2026-08-20.
 
 ---
@@ -309,15 +344,19 @@ curl -sS -o /dev/null -w "8188=%{http_code}\n" http://192.168.91.11:8188/
 curl -sS -o /dev/null -w "8166=%{http_code}\n" http://127.0.0.1:8166/system_stats
 curl -sS -o /dev/null -w "8177=%{http_code}\n" http://127.0.0.1:8177/system_stats
 curl -sS -o /dev/null -w "proxy8166=%{http_code}\n" http://127.0.0.1:8600/comfyui-r/8166/system_stats
+curl -sS -o /tmp/hires_v02.json -w "hires_v02=%{http_code} bytes=%{size_download}\n" \
+  http://127.0.0.1:8600/Edit_Image_Hi_res_v02.json
 
 python3 -c "
 from client.comfy_client import ComfyClient
 c=ComfyClient(workflow_path='Edit_Image_v08.json'); c.load_workflow()
-print('edit inject', c.id_load, c.id_prompt, c.id_prompt_key, c.id_seed, c.id_seed_key)
+print('edit', c.id_load, c.id_load_mask, c.id_prompt, c.id_prompt_key)
+h=ComfyClient(workflow_path='Edit_Image_Hi_res_v02.json'); h.load_workflow()
+print('hires', h.id_load, h.id_load_mask, h.id_prompt, h.id_prompt_key)
 "
 ```
 
-Expect: health `ComfyNuke code server OK`, bootstrap **200**, Comfy **200**, edit inject `80 109 value` and seed `11`.
+Expect: health `ComfyNuke code server OK`, bootstrap **200**, Comfy **200**, `hires_v02=200` and size **> 1000** (10 bytes = `.forbidden` leak), edit inject `80 123 109 value`, hi-res `164 167 161 value`.
 
 Nuke: re-run the one-liner, **Pix-Edit → Ping Server**, then Edit Image. Script Editor should show `comfyui-r/8166` and `prompt=109.value`, then a new `ComfyEdit_Result_###` Read (GPU time).
 
@@ -339,8 +378,10 @@ Do not force-push. Do not commit ACL or `studio_config.json`.
 
 ## 10. If you continue this work
 
-- Keep Edit Image on `:8166` until `was-ns` is installed on whichever ComfyUI you retarget (then re-check `/object_info` for `Text Multiline` and `Mask Invert` before changing `workflow_routes.json`).
+- Keep Edit Image **v08** on this hub’s `:8166` until `was-ns` is installed on whichever ComfyUI you retarget (then re-check `/object_info` for `Text Multiline` and `Mask Invert` before changing `workflow_routes.json`).
+- Keep Hi-res v02 on **91.12:8166** (`8166-12`). If ping fails, Nuke only pops “Hi-res is down — use Edit Image”; it does not auto-switch graphs.
+- After adding a new root workflow JSON: put it in `SYNC_FILES` + `_SYNC_FILES` / `_ALWAYS_REFRESH`, `workflow_routes.json`, then **restart `:8600`** and confirm `GET /ThatFile.json` is 200 with real JSON size.
 - Do not rewrite inject IDs unless `ComfyClient.load_workflow()` on the **current** JSON disagrees.
 - `:8188` has no systemd unit yet; adding one must **not** call `start-comfyui-production.sh`.
 - i2v needs `MiniMaxH3ImageToVideo` on some backend before assigning `video_minimax_h3_i2v.json`.
-- Nuke UI changes are only proven inside Nuke; shell checks cover inject + HTTP only.
+- Nuke UI changes (Crop describe, MOV/EXR stills) are only proven inside Nuke; shell checks cover inject + HTTP only.

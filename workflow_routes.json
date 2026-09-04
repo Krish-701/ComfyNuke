@@ -15,6 +15,11 @@
       "id": "8177",
       "name": "Production ComfyUI :8177",
       "url": "http://127.0.0.1:8177"
+    },
+    {
+      "id": "8166-12",
+      "name": "Edit Hi-res ComfyUI 91.12:8166",
+      "url": "http://192.168.91.12:8166"
     }
   ],
   "workflows": [
@@ -22,6 +27,21 @@
       "file": "Edit_Image_v08.json",
       "server_id": "8166",
       "notes": "Edit Image needs WAS Node Suite on :8166 (Text Multiline, Mask Invert)"
+    },
+    {
+      "file": "Edit_Image_Hi_res.json",
+      "server_id": "8166-12",
+      "notes": "Hi-res v02 alias: plate 164, mask 167, prompt 161 on 192.168.91.12:8166"
+    },
+    {
+      "file": "Edit_Image_Hi_res_v02.json",
+      "server_id": "8166-12",
+      "notes": "Hi-res edit v02: plate 164, mask 167, prompt 161 on 192.168.91.12:8166"
+    },
+    {
+      "file": "Edit_Image_Hi_res_v01.json",
+      "server_id": "8166-12",
+      "notes": "Hi-res edit v01 (legacy) on 192.168.91.12:8166"
     },
     {
       "file": "Image_generation_v01.json",
