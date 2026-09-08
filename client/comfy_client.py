@@ -34,6 +34,10 @@ NODE_HIRES_PROMPT = "161"  # PrimitiveStringMultiline user input
 NODE_HIRES_LOAD_V01 = "278"
 NODE_HIRES_MASK_V01 = "297"
 NODE_HIRES_PROMPT_V01 = "290"
+NODE_REF_LOAD = "151"  # plate (Edit_Image_Ref_Hi_res_v01)
+NODE_REF_MASK = "188"  # mask_luma
+NODE_REF_IMAGE = "173"  # reference LoadImage
+NODE_REF_PROMPT = "181"  # User-Prompt
 NODE_SEED = "242"  # Seed (rgthree) — may differ; auto-discovered
 NODE_SAVE = "121"
 
@@ -220,6 +224,7 @@ class ComfyClient:
         # Resolved per-workflow (None until load_workflow)
         self.id_load: Optional[str] = None  # plate LoadImage
         self.id_load_mask: Optional[str] = None  # mask LoadImage (v08+)
+        self.id_load_ref: Optional[str] = None  # reference LoadImage (ref hi-res)
         self.id_prompt: Optional[str] = None
         self.id_prompt_key = "value"  # or "text"
         self.id_prompt_neg: Optional[str] = None
@@ -235,6 +240,7 @@ class ComfyClient:
         for name in (
             "Edit_Image_v08.json",
             "Edit_Image_Hi_res_v03.json",
+            "Edit_Image_Ref_Hi_res_v01.json",
             "Edit_Image_Hi_res_v02.json",
             "Edit_Image_Hi_res_v01.json",
             "Edit_Image_Hi_res.json",
@@ -330,9 +336,20 @@ class ComfyClient:
         # v08+: plate LoadImage (80) + mask LoadImage (123)
         # Older graphs: single LoadImage (RGBA with alpha)
         self.id_load, self.id_load_mask = self._resolve_load_image_nodes(data)
+        self.id_load_ref = None
+        if NODE_REF_IMAGE in data and data.get(NODE_REF_IMAGE, {}).get("class_type") == "LoadImage":
+            self.id_load_ref = NODE_REF_IMAGE
 
-        # User prompt: Hi-res v02 161, v01 290, then v08 109, else auto-discover
+        # User prompt: Ref 181, Hi-res 161, v01 290, then v08 109, else auto-discover
         if (
+            NODE_REF_PROMPT in data
+            and isinstance(data.get(NODE_REF_PROMPT), dict)
+            and data[NODE_REF_PROMPT].get("class_type") == "PrimitiveStringMultiline"
+            and isinstance((data[NODE_REF_PROMPT].get("inputs") or {}).get("value"), str)
+        ):
+            self.id_prompt = NODE_REF_PROMPT
+            self.id_prompt_key = "value"
+        elif (
             NODE_HIRES_PROMPT in data
             and isinstance(data.get(NODE_HIRES_PROMPT), dict)
             and data[NODE_HIRES_PROMPT].get("class_type") == "PrimitiveStringMultiline"
@@ -465,7 +482,10 @@ class ComfyClient:
         if not load_ids:
             return None, None
 
-        # Hi-res v02: 164 plate_srgb, 167 mask_luma
+        # Ref Hi-res: 151 plate, 188 mask (173 is the extra reference image)
+        if NODE_REF_LOAD in load_ids and NODE_REF_MASK in load_ids:
+            return NODE_REF_LOAD, NODE_REF_MASK
+        # Hi-res v03: 164 plate_srgb, 167 mask_luma
         if NODE_HIRES_LOAD in load_ids and NODE_HIRES_MASK in load_ids:
             return NODE_HIRES_LOAD, NODE_HIRES_MASK
         # Hi-res v01: 278 / 297
@@ -596,6 +616,7 @@ class ComfyClient:
         filename_prefix: Optional[str] = None,
         workflow: Optional[Dict[str, Any]] = None,
         mask_image_name: Optional[str] = None,
+        ref_image_name: Optional[str] = None,
         require_save: bool = True,
     ) -> Dict[str, Any]:
         if workflow is None:
@@ -638,6 +659,16 @@ class ComfyClient:
                 raise ComfyError(
                     "mask_image_name set but workflow has no mask LoadImage "
                     f"(expected node {NODE_LOAD_MASK})"
+                )
+
+        if ref_image_name:
+            rid = self.id_load_ref or NODE_REF_IMAGE
+            if rid and rid in wf:
+                _set(rid, "image", ref_image_name, required=True)
+            else:
+                raise ComfyError(
+                    "ref_image_name set but workflow has no reference LoadImage "
+                    f"(expected node {NODE_REF_IMAGE})"
                 )
 
         # Prompt: PrimitiveStringMultiline.value (e.g. node 109) or CLIP text

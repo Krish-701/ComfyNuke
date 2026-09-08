@@ -57,6 +57,8 @@ def infer_workflow(prompt: Any = None, client_id: str = "", detail: str = "") ->
             return "Image_Description_v01.json"
         if "73" in nodes and ("29" in nodes or "52" in nodes):
             return "Image_generation_v01.json"
+        if "151" in nodes and "173" in nodes and "188" in nodes:
+            return "Edit_Image_Ref_Hi_res_v01.json"
         if "164" in nodes and "167" in nodes:
             return "Edit_Image_Hi_res_v03.json"
         if "278" in nodes and "297" in nodes:

@@ -122,6 +122,13 @@ EDIT_HIRES_PROMPT = "161"  # user input text
 EDIT_HIRES_LOAD_V01 = "278"
 EDIT_HIRES_MASK_V01 = "297"
 EDIT_HIRES_PROMPT_V01 = "290"
+EDIT_REF_HIRES_WORKFLOW = os.path.join(
+    REPO_ROOT, "Edit_Image_Ref_Hi_res_v01.json"
+).replace("\\", "/")
+EDIT_REF_LOAD = "151"  # plate
+EDIT_REF_MASK = "188"  # mask_luma
+EDIT_REF_IMAGE = "173"  # reference image
+EDIT_REF_PROMPT = "181"  # user prompt
 IMAGE_GEN_WORKFLOW = os.path.join(REPO_ROOT, "Image_generation_v01.json").replace(
     "\\", "/"
 )
@@ -227,6 +234,7 @@ def resolve_server_for_workflow(workflow_path, fallback=None):
                 "Edit_Image_Hi_res_v03.json",
                 "Edit_Image_Hi_res_v02.json",
                 "Edit_Image_Hi_res_v01.json",
+                "Edit_Image_Ref_Hi_res_v01.json",
             )
         )
     sid = None
@@ -398,6 +406,7 @@ TEMP_ALPHA_PREVIEW = os.path.join(TEMP_DIR, "alpha_preview.png")  # grayscale A 
 TEMP_ROTO_WRITE = os.path.join(TEMP_DIR, "roto_write_rgba.png")   # raw Nuke Write
 TEMP_MASK_LUMA = os.path.join(TEMP_DIR, "mask_luma.png")          # Roto alpha as gray RGB
 TEMP_I2V_FRAME = os.path.join(TEMP_DIR, "i2v_frame.png")          # current frame for i2v
+TEMP_REF_FRAME = os.path.join(TEMP_DIR, "ref_srgb.png")           # Viewer2 reference still
 # Reference style (user's known-good alpha) — optional local QC only
 REF_ALPHA_EXAMPLE = r"D:\bear-alpha.png"
 
@@ -716,6 +725,65 @@ def _viewer_connected_input(node):
         if inp is not None:
             return inp
     return None
+
+
+def _is_ref_hires_workflow(wf_path):
+    b = os.path.basename(str(wf_path or "")).replace(" ", "_").lower()
+    return "ref" in b and ("hi_res" in b or "hires" in b)
+
+
+def _is_plain_hires_workflow(wf_path):
+    b = os.path.basename(str(wf_path or "")).replace(" ", "_").lower()
+    if "ref" in b:
+        return False
+    return "hi_res" in b or "hires" in b
+
+
+def _find_viewer_node():
+    try:
+        av = nuke.activeViewer()
+        if av is not None:
+            n = av.node()
+            if n is not None:
+                return n
+    except Exception:
+        pass
+    for name in ("Viewer1", "Viewer2"):
+        try:
+            n = nuke.toNode(name)
+        except Exception:
+            n = None
+        if n is not None:
+            return n
+    try:
+        vs = nuke.allNodes("Viewer")
+        if vs:
+            return vs[0]
+    except Exception:
+        pass
+    return None
+
+
+def _viewer_input_source(pipe_1based):
+    """
+    Node connected to Viewer input N (the number key artists press: 1, 2, …).
+    Nuke API is 0-based: key 1 → input(0), key 2 → input(1).
+    Merge / Roto / Read / Crop all work.
+    """
+    vn = _find_viewer_node()
+    if vn is None:
+        return None
+    try:
+        idx = max(0, int(pipe_1based) - 1)
+    except Exception:
+        idx = 0
+    try:
+        inp = vn.input(idx)
+    except Exception:
+        inp = None
+    if inp is None:
+        return None
+    return resolve_export_node(inp) or inp
 
 
 def resolve_export_node(node):
@@ -2826,6 +2894,21 @@ def run_edit_on_node(
         node = n
 
     node = resolve_export_node(node) or node
+    ref_node = None
+    if _is_ref_hires_workflow(workflow or ""):
+        v1 = _viewer_input_source(1)
+        v2 = _viewer_input_source(2)
+        if v1 is not None:
+            node = v1
+            _log("Ref Hi-res Viewer1 (key 1) -> plate/mask: %s" % node.name())
+        if v2 is None:
+            raise RuntimeError(
+                "Edit Image Ref Hi-res needs a reference on Viewer input 2.\n\n"
+                "Press 1 on the plate node (Merge / Roto / Read) — LoadImage 151 + mask 188.\n"
+                "Press 2 on the reference node (Merge / Roto / Read) — LoadImage 173."
+            )
+        ref_node = v2
+        _log("Ref Hi-res Viewer2 (key 2) -> reference: %s" % ref_node.name())
 
     if not prompt or not str(prompt).strip():
         raise RuntimeError("Prompt is empty")
@@ -2845,7 +2928,8 @@ def run_edit_on_node(
 
     wf_path = workflow or DEFAULT_WORKFLOW
     wf_base = os.path.basename(str(wf_path or "")).replace(" ", "_").lower()
-    is_hires = "hi_res" in wf_base or "hires" in wf_base
+    is_ref_hires = _is_ref_hires_workflow(wf_path)
+    is_hires = _is_plain_hires_workflow(wf_path)
     # Prefer latest edit workflow on disk (v08); migrate any older name.
     # Do not migrate Hi-res jobs onto v08.
     if not is_hires:
@@ -2865,7 +2949,9 @@ def run_edit_on_node(
                     wf_path = newer
                 break
     if not os.path.isfile(wf_path):
-        if is_hires:
+        if is_ref_hires:
+            wf_path = EDIT_REF_HIRES_WORKFLOW
+        elif is_hires:
             wf_path = _latest_hires_workflow_path()
         elif not str(wf_path).endswith("Edit_Image_v08.json"):
             wf_path = os.path.join(REPO_ROOT, "Edit_Image_v08.json")
@@ -2879,8 +2965,22 @@ def run_edit_on_node(
     # --- Phase 1: Nuke Write (plate_srgb + mask_luma) ---
     _BG_JOB_ACTIVE = True
     try:
-        _log("Export starting (Write)…")
+        _log("Export starting (Write)...")
         exported = export_frame_for_comfy(node, frame)
+        ref_path = None
+        if ref_node is not None:
+            rp, _cs, rmethod = write_visible_frame_png(
+                ref_node, frame, TEMP_REF_FRAME
+            )
+            ref_path = rp
+            _log(
+                "Reference PNG from %s (%s, %s bytes)"
+                % (
+                    ref_node.name(),
+                    rmethod,
+                    os.path.getsize(ref_path) if os.path.isfile(ref_path) else 0,
+                )
+            )
         if isinstance(exported, (tuple, list)) and len(exported) >= 3:
             plate_path, mask_path, method = exported[0], exported[1], exported[2]
         elif isinstance(exported, (tuple, list)) and len(exported) == 2:
@@ -2920,8 +3020,9 @@ def run_edit_on_node(
         )
         _log("Uploading plate_srgb + mask_luma to Comfy...")
         wf_base = os.path.basename(str(wf_path or "")).replace(" ", "_").lower()
-        is_hires_job = "hi_res" in wf_base or "hires" in wf_base
-        if is_hires_job:
+        is_ref_job = _is_ref_hires_workflow(wf_path)
+        is_hires_job = _is_plain_hires_workflow(wf_path)
+        if is_hires_job or is_ref_job:
             if warn_if_hires_down(server):
                 _BG_JOB_ACTIVE = False
                 return
@@ -2933,8 +3034,23 @@ def run_edit_on_node(
                     "Cannot reach ComfyUI at %s\n%s" % (server, ping_err)
                 )
         client.load_workflow()
-        if is_hires_job:
-            data = getattr(client, "_workflow_template", None) or {}
+        data = getattr(client, "_workflow_template", None) or {}
+        if is_ref_job:
+            client.id_load = EDIT_REF_LOAD
+            client.id_load_mask = EDIT_REF_MASK
+            client.id_load_ref = EDIT_REF_IMAGE
+            client.id_prompt = EDIT_REF_PROMPT
+            client.id_prompt_key = "value"
+            _log(
+                "Ref Hi-res inject: plate=%s mask=%s ref=%s prompt=%s"
+                % (
+                    client.id_load,
+                    client.id_load_mask,
+                    client.id_load_ref,
+                    client.id_prompt,
+                )
+            )
+        elif is_hires_job:
             if EDIT_HIRES_LOAD in data and EDIT_HIRES_MASK in data:
                 client.id_load = EDIT_HIRES_LOAD
                 client.id_load_mask = EDIT_HIRES_MASK
@@ -2973,12 +3089,24 @@ def run_edit_on_node(
             uuid.uuid4().hex[:8],
         )
         prefix = "nuke/%s/%s" % (host, stamp)
+        ref_name = None
+        if is_ref_job:
+            if not ref_path or not os.path.isfile(ref_path):
+                raise RuntimeError(
+                    "Reference image was not written. Press 2 on the reference node "
+                    "(Merge / Roto / Read) so Viewer input 2 is connected."
+                )
+            ref_name = client.upload_image(
+                ref_path, remote_name="nuke_%s_ref_srgb.png" % host
+            )
+            _log("ref   file -> node %s: %s" % (EDIT_REF_IMAGE, ref_name))
         wf = client.build_prompt(
             image_name=plate_name,
             prompt=prompt_s,
             seed=seed,
             filename_prefix=prefix,
             mask_image_name=mask_name,
+            ref_image_name=ref_name,
         )
         _log(
             "Inject: plate=%s mask=%s prompt=%s.%s seed=%s.%s"
@@ -3542,6 +3670,26 @@ def show_hires_panel(initial_prompt=None):
     show_panel(initial_prompt=initial_prompt, workflow=EDIT_HIRES_WORKFLOW)
 
 
+def show_ref_hires_panel(initial_prompt=None):
+    """Plate+mask from Viewer 1, reference from Viewer 2 → nodes 151 / 188 / 173 / 181."""
+    if nuke is None:
+        raise RuntimeError("Must run inside Nuke")
+    server = resolve_server_for_workflow(
+        EDIT_REF_HIRES_WORKFLOW, fallback=DEFAULT_SERVER
+    )
+    if warn_if_hires_down(server):
+        return
+    if _viewer_input_source(2) is None:
+        nuke.message(
+            "Edit Image Ref Hi-res\n\n"
+            "Press 1 on the plate (Merge / Roto / Read) — that is LoadImage 151 + mask 188.\n"
+            "Press 2 on the reference image (any Merge / Roto / Read) — that is LoadImage 173.\n\n"
+            "Viewer input 2 is empty right now."
+        )
+        return
+    show_panel(initial_prompt=initial_prompt, workflow=EDIT_REF_HIRES_WORKFLOW)
+
+
 def show_panel(initial_prompt=None, workflow=None):
     """Open Edit Image panel. Optional initial_prompt pre-fills the prompt field."""
     if nuke is None:
@@ -3553,13 +3701,17 @@ def show_panel(initial_prompt=None, workflow=None):
         str(initial_prompt).strip() if initial_prompt else DEFAULT_EDIT_PROMPT
     )
     start_wf = workflow or DEFAULT_WORKFLOW
-    hires = "hi_res" in os.path.basename(str(start_wf)).lower() or "hires" in os.path.basename(str(start_wf)).lower()
+    hires = _is_plain_hires_workflow(start_wf)
+    refhi = _is_ref_hires_workflow(start_wf)
 
     class ComfyEditPanel(nukescripts.PythonPanel):
         def __init__(self, prompt_text):
-            nukescripts.PythonPanel.__init__(
-                self, "Pix-Edit Image Hi-res" if hires else "Pix-Edit Image"
-            )
+            title = "Pix-Edit Image"
+            if refhi:
+                title = "Pix-Edit Image Ref Hi-res"
+            elif hires:
+                title = "Pix-Edit Image Hi-res"
+            nukescripts.PythonPanel.__init__(self, title)
             self.server = nuke.String_Knob("server", "Server")
             self.workflow = nuke.File_Knob("workflow", "Workflow")
             self.workflow.setValue(start_wf)
@@ -3584,6 +3736,13 @@ def show_panel(initial_prompt=None, workflow=None):
                 "Select <b>Merge</b> to send the composite (not the raw Read).<br>"
                 "Select the last node. Read only = full-frame."
             )
+            help_ref = (
+                "<b>Ref Hi-res</b> on 192.168.91.12:8166.<br>"
+                "Viewer <b>1</b> (press 1 on Merge/Roto/Read) → plate <b>151</b> "
+                "+ mask_luma <b>188</b>.<br>"
+                "Viewer <b>2</b> (press 2 on the reference node) → LoadImage <b>173</b>.<br>"
+                "Prompt → node <b>181</b>. Merge / Roto / image all work."
+            )
             help_v08 = (
                 "<b>Roto1</b> = masked edit (plate 80, mask 123).<br>"
                 "<b>RotoPaint</b> is baked into the plate.<br>"
@@ -3593,7 +3752,7 @@ def show_panel(initial_prompt=None, workflow=None):
             self.help_txt = nuke.Text_Knob(
                 "help_txt",
                 "",
-                help_hires if hires else help_v08,
+                help_ref if refhi else (help_hires if hires else help_v08),
             )
             for k in (
                 self.server,
@@ -4738,6 +4897,7 @@ def register_menu():
     m = menubar.addMenu(MENU_NAME)
     m.addCommand("Edit Image...", show_panel)
     m.addCommand("Edit Image Hi-res...", show_hires_panel)
+    m.addCommand("Edit Image Ref Hi-res...", show_ref_hires_panel)
     m.addCommand("Image Gen...", show_image_gen_panel)
     m.addCommand("Image Description...", show_image_description_panel)
     m.addCommand("Image to Video...", show_image_to_video_panel)
@@ -4745,7 +4905,7 @@ def register_menu():
     m.addCommand("Prompt Examples...", show_prompt_examples_panel)
 
     nuke.tprint(
-        "[Pix-Edit] Menu OK — Edit / Hi-res / Gen / Describe / I2V / Ping | "
+        "[Pix-Edit] Menu OK — Edit / Hi-res / Ref Hi-res / Gen / Describe / I2V / Ping | "
         "server=%s root=%s workflow=%s"
         % (DEFAULT_SERVER, REPO_ROOT, os.path.basename(DEFAULT_WORKFLOW))
     )

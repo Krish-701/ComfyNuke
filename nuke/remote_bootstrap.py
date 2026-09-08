@@ -58,6 +58,7 @@ _SYNC_FILES = (
     "Edit_Image_Hi_res_v02.json",
     "Edit_Image_Hi_res_v01.json",
     "Edit_Image_Hi_res.json",
+    "Edit_Image_Ref_Hi_res_v01.json",
     "Image_generation_v01.json",
     "Image_Description_v01.json",
     "video_minimax_h3_i2v.json",
@@ -86,6 +87,7 @@ _ALWAYS_REFRESH = frozenset(
         "Edit_Image_Hi_res_v02.json",
         "Edit_Image_Hi_res_v01.json",
         "Edit_Image_Hi_res.json",
+        "Edit_Image_Ref_Hi_res_v01.json",
         "Image_generation_v01.json",
         "Image_Description_v01.json",
         "video_minimax_h3_i2v.json",
@@ -427,11 +429,12 @@ def bootstrap():
     _log("  workflows (from server when outdated):")
     _log("    edit:  %s" % getattr(ComfyEdit, "DEFAULT_WORKFLOW", ""))
     _log("    hires: %s" % getattr(ComfyEdit, "EDIT_HIRES_WORKFLOW", ""))
+    _log("    ref:   %s" % getattr(ComfyEdit, "EDIT_REF_HIRES_WORKFLOW", ""))
     _log("    gen:   %s" % getattr(ComfyEdit, "IMAGE_GEN_WORKFLOW", ""))
     _log("    desc:  %s" % getattr(ComfyEdit, "IMAGE_DESC_WORKFLOW", ""))
     _log("    i2v:   %s" % getattr(ComfyEdit, "I2V_WORKFLOW", ""))
     _log("  Menu: Nuke > Pix-Edit")
-    _log("    Edit Image | Edit Image Hi-res | Image Gen | Image Description | Image to Video | Ping")
+    _log("    Edit Image | Edit Image Hi-res | Edit Image Ref Hi-res | Image Gen | Image Description | Image to Video | Ping")
     _log("  Jobs share one ComfyUI queue on the Ubuntu GPU.")
     _log("=" * 56)
     return ComfyEdit
