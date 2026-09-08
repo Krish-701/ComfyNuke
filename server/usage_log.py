@@ -58,7 +58,7 @@ def infer_workflow(prompt: Any = None, client_id: str = "", detail: str = "") ->
         if "73" in nodes and ("29" in nodes or "52" in nodes):
             return "Image_generation_v01.json"
         if "164" in nodes and "167" in nodes:
-            return "Edit_Image_Hi_res_v02.json"
+            return "Edit_Image_Hi_res_v03.json"
         if "278" in nodes and "297" in nodes:
             return "Edit_Image_Hi_res_v01.json"
         if "80" in nodes and "123" in nodes:
@@ -379,6 +379,7 @@ class UsageLog:
                     "last_ts": r.get("ts"),
                     "first_iso": r.get("ts_iso"),
                     "last_iso": r.get("ts_iso"),
+                    "workflow_counts": {},
                 },
             )
             # refresh identity
@@ -399,6 +400,19 @@ class UsageLog:
 
             u["bytes_in"] += int(r.get("bytes_in") or 0)
             u["bytes_out"] += int(r.get("bytes_out") or 0)
+
+            wf_name = str(r.get("workflow") or "").strip()
+            if ev in (EVENT_JOB_QUEUE, EVENT_JOB_DONE, EVENT_JOB_ERROR) and wf_name:
+                wc = u.setdefault("workflow_counts", {})
+                slot = wc.setdefault(
+                    wf_name, {"jobs_queued": 0, "jobs_done": 0, "jobs_error": 0}
+                )
+                if ev == EVENT_JOB_QUEUE:
+                    slot["jobs_queued"] += 1
+                elif ev == EVENT_JOB_DONE:
+                    slot["jobs_done"] += 1
+                else:
+                    slot["jobs_error"] += 1
 
             if ev == EVENT_JOB_QUEUE:
                 u["jobs_queued"] += 1
@@ -431,6 +445,29 @@ class UsageLog:
             u["avg_runtime_sec"] = (
                 round(float(u["total_runtime_sec"]) / done, 2) if done else 0.0
             )
+            counts = u.get("workflow_counts") or {}
+            parts = []
+            ranked = sorted(
+                counts.items(),
+                key=lambda kv: (
+                    -(int((kv[1] or {}).get("jobs_done") or 0)
+                      + int((kv[1] or {}).get("jobs_queued") or 0)),
+                    kv[0],
+                ),
+            )
+            names = []
+            for wname, info in ranked:
+                info = info or {}
+                n = wname[:-5] if wname.endswith(".json") else wname
+                jd = int(info.get("jobs_done") or 0)
+                jq = int(info.get("jobs_queued") or 0)
+                show = jd or jq
+                if not show:
+                    continue
+                parts.append("%s (%s)" % (n, jd if jd else jq))
+                names.append(n)
+            u["workflows"] = names
+            u["workflows_label"] = ", ".join(parts) if parts else ""
             users.append(u)
         users.sort(
             key=lambda x: (-float(x.get("total_runtime_sec") or 0), -int(x.get("jobs_done") or 0))
@@ -521,6 +558,7 @@ class UsageLog:
                 "access_denied",
                 "total_runtime_sec",
                 "avg_runtime_sec",
+                "workflows_label",
                 "bytes_in",
                 "bytes_out",
                 "first_iso",

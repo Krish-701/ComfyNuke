@@ -542,6 +542,7 @@
             Only named users who actually <b>queued or finished a job</b>.
             No name or 0 jobs are omitted here — they stay in the event log below.
             Sort default: <b>latest activity</b>.
+            <b>Workflow</b> is what they actually queued in this range.
           </p>
           <div class="log-table-wrap tall" style="margin-top:10px">
             <table>
@@ -551,6 +552,7 @@
                   <th>Name</th>
                   <th>Group</th>
                   <th>IP</th>
+                  <th>Workflow</th>
                   <th>Jobs queued</th>
                   <th>Jobs done</th>
                   <th>Total runtime</th>
@@ -1971,11 +1973,12 @@
           <td>${esc(short ? fmtNameShort(u.label) : u.label)}</td>
           <td>${esc(u.group || "—")}</td>
           <td class="mono">${esc(u.ip || "")}</td>
+          <td class="mono">${esc(u.workflows_label || "—")}</td>
           <td>${esc(u.jobs_queued || 0)}</td>
           <td>${esc(u.jobs_done || 0)}</td>
           <td>${esc(fmtSec(u.total_runtime_sec))}</td>
           <td class="mono">${esc(short ? fmtTimeShort(u.last_iso) : (u.last_iso || "").replace("T", " "))}</td>
-        </tr>`).join("") || `<tr><td colspan="8" class="hint">No named users with jobs in this range — see event log below</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="9" class="hint">No named users with jobs in this range — see event log below</td></tr>`;
     }
 
     async function lookupJob() {

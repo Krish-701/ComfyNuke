@@ -54,6 +54,7 @@ _SYNC_FILES = (
     "nuke/launch.py",
     "client/comfy_client.py",
     "Edit_Image_v08.json",
+    "Edit_Image_Hi_res_v03.json",
     "Edit_Image_Hi_res_v02.json",
     "Edit_Image_Hi_res_v01.json",
     "Edit_Image_Hi_res.json",
@@ -71,6 +72,7 @@ _OPTIONAL = frozenset(
         "studio_config.json",
         "workflow_routes.json",
         "Edit_Image_Hi_res_v01.json",
+        "Edit_Image_Hi_res_v02.json",
     ]
 )
 # Always re-download these from the hub on every Nuke launch (never keep stale
@@ -80,6 +82,7 @@ _ALWAYS_REFRESH = frozenset(
         "nuke/ComfyEdit.py",
         "client/comfy_client.py",
         "Edit_Image_v08.json",
+        "Edit_Image_Hi_res_v03.json",
         "Edit_Image_Hi_res_v02.json",
         "Edit_Image_Hi_res_v01.json",
         "Edit_Image_Hi_res.json",

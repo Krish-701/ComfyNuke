@@ -99,21 +99,22 @@ DEFAULT_WORKFLOW = os.path.join(REPO_ROOT, "Edit_Image_v08.json").replace("\\", 
 
 
 def _latest_hires_workflow_path():
-    """Prefer v02; fall back to v01 / generic alias."""
+    """Prefer v03; fall back to v02 / v01 / generic alias."""
     for name in (
-        "Edit_Image_Hi_res_v02.json",
+        "Edit_Image_Hi_res_v03.json",
         "Edit_Image_Hi_res.json",
+        "Edit_Image_Hi_res_v02.json",
         "Edit_Image_Hi_res_v01.json",
     ):
         p = os.path.join(REPO_ROOT, name)
         if os.path.isfile(p):
             return p.replace("\\", "/")
-    return os.path.join(REPO_ROOT, "Edit_Image_Hi_res_v02.json").replace("\\", "/")
+    return os.path.join(REPO_ROOT, "Edit_Image_Hi_res_v03.json").replace("\\", "/")
 
 
 EDIT_HIRES_WORKFLOW = _latest_hires_workflow_path()
 HIRES_UPSTREAM = "http://192.168.91.12:8166"
-# v02 inject (Edit_Image_Hi_res_v02.json)
+# v03/v02 inject (Edit_Image_Hi_res_v03.json)
 EDIT_HIRES_LOAD = "164"  # plate_srgb
 EDIT_HIRES_MASK = "167"  # mask_luma
 EDIT_HIRES_PROMPT = "161"  # user input text
@@ -223,6 +224,7 @@ def resolve_server_for_workflow(workflow_path, fallback=None):
         aliases.update(
             (
                 "Edit_Image_Hi_res.json",
+                "Edit_Image_Hi_res_v03.json",
                 "Edit_Image_Hi_res_v02.json",
                 "Edit_Image_Hi_res_v01.json",
             )
@@ -1360,6 +1362,19 @@ def _is_crop_node(node):
     return cls in ("Crop", "Crop2")
 
 
+def _is_merge_like(node):
+    """True for Merge / Merge2 / ChannelMerge — write the composite, not the Read file."""
+    if node is None:
+        return False
+    try:
+        cls = str(node.Class() or "")
+    except Exception:
+        return False
+    if cls in ("Merge", "Merge2", "ChannelMerge", "MergeExpression", "Keymix"):
+        return True
+    return cls.startswith("Merge")
+
+
 def _crop_box_xyrt(crop_node):
     """Nuke Crop box as (x, y, r, t) in Nuke coords (origin bottom-left)."""
     if crop_node is None or "box" not in crop_node.knobs():
@@ -2268,8 +2283,12 @@ def export_frame_for_comfy(node, frame, tmp_dir=None):
     read = find_upstream_read(node)
     plate_src = evaluate_read_path(read) if read else None
     roto, paint = _find_roto_and_paint(node)
+    selected_is_merge = _is_merge_like(node)
     # Bake RGB from a real image node (never Viewer). Paint lives in the tree.
-    if paint is not None:
+    # Merge/Crop: write THAT node so the composite (not the raw Read file) is sent.
+    if selected_is_merge or _is_crop_node(node):
+        source = node
+    elif paint is not None:
         source = resolve_export_node(node) or paint
         if _is_non_image_write_node(source):
             source = paint
@@ -2278,23 +2297,27 @@ def export_frame_for_comfy(node, frame, tmp_dir=None):
         source = resolve_export_node(source) or source
 
     _log(
-        "Export: source=%s read=%s plate=%s roto=%s paint=%s"
+        "Export: source=%s read=%s plate=%s roto=%s paint=%s merge=%s"
         % (
             source.name(),
             read.name() if read else "None",
             os.path.basename(plate_src) if plate_src else "None",
             roto.name() if roto else "None",
             paint.name() if paint else "None",
+            "yes" if selected_is_merge else "no",
         )
     )
 
     # --- 1) RGB plate (must succeed before Comfy) ---
+    # Merge: always Nuke-Write the selected composite (do not Qt-load the Read file).
     plate_png, plate_method = prepare_display_plate(
         read,
         plate_src,
         frame,
         fallback_node=source,
-        force_tree_write=paint is not None,
+        force_tree_write=(
+            paint is not None or selected_is_merge or _is_crop_node(node)
+        ),
     )
 
     QtGui, _ = _qt_gui()
@@ -3510,7 +3533,7 @@ def schedule_edit(
 
 
 def show_hires_panel(initial_prompt=None):
-    """Edit Image Hi-res → 192.168.91.12:8166 (v02 nodes 164 / 167 / 161)."""
+    """Edit Image Hi-res → 192.168.91.12:8166 (v03 nodes 164 / 167 / 161)."""
     if nuke is None:
         raise RuntimeError("Must run inside Nuke")
     server = resolve_server_for_workflow(EDIT_HIRES_WORKFLOW, fallback=DEFAULT_SERVER)
@@ -3553,16 +3576,18 @@ def show_panel(initial_prompt=None, workflow=None):
             self.out_dir = nuke.String_Knob("output_dir", "Output dir")
             self.out_dir.setValue(DEFAULT_OUT)
             help_hires = (
-                "<b>Hi-res v02</b>: plate_srgb → node <b>164</b>, "
+                "<b>Hi-res v03</b>: plate_srgb → node <b>164</b>, "
                 "mask_luma → <b>167</b>, user text → <b>161</b> "
                 "on 192.168.91.12:8166.<br>"
                 "If that box is down, a popup tells you to use Edit Image instead.<br>"
                 "<b>RotoPaint</b> is baked into the plate.<br>"
+                "Select <b>Merge</b> to send the composite (not the raw Read).<br>"
                 "Select the last node. Read only = full-frame."
             )
             help_v08 = (
                 "<b>Roto1</b> = masked edit (plate 80, mask 123).<br>"
                 "<b>RotoPaint</b> is baked into the plate.<br>"
+                "Select <b>Merge</b> to send the composite (not the raw Read).<br>"
                 "Select the last node. Read only = full-frame."
             )
             self.help_txt = nuke.Text_Knob(
@@ -4212,7 +4237,7 @@ def export_frame_for_i2v(node, frame):
         )
     )
     _, paint = _find_roto_and_paint(source)
-    force_tree = paint is not None
+    force_tree = paint is not None or _is_merge_like(source) or _is_crop_node(source)
     try:
         force_tree = force_tree or (source.Class() != "Read")
     except Exception:

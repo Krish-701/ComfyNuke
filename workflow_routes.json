@@ -31,12 +31,17 @@
     {
       "file": "Edit_Image_Hi_res.json",
       "server_id": "8166-12",
-      "notes": "Hi-res v02 alias: plate 164, mask 167, prompt 161 on 192.168.91.12:8166"
+      "notes": "Hi-res v03 alias: plate 164, mask 167, prompt 161 on 192.168.91.12:8166"
+    },
+    {
+      "file": "Edit_Image_Hi_res_v03.json",
+      "server_id": "8166-12",
+      "notes": "Hi-res edit v03: plate 164, mask 167, prompt 161 on 192.168.91.12:8166"
     },
     {
       "file": "Edit_Image_Hi_res_v02.json",
       "server_id": "8166-12",
-      "notes": "Hi-res edit v02: plate 164, mask 167, prompt 161 on 192.168.91.12:8166"
+      "notes": "Hi-res edit v02 (legacy) on 192.168.91.12:8166"
     },
     {
       "file": "Edit_Image_Hi_res_v01.json",

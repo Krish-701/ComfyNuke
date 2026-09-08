@@ -9,7 +9,7 @@ This document is the older Windows-dev handoff. Paths like `D:\AI-Dev\Krish-Comf
 | Mode | Menu | Workflow | Server | Inject |
 |------|------|----------|--------|--------|
 | Edit Image | Pix-Edit → Edit Image... | `Edit_Image_v08.json` | hub `:8166` via `:8600/comfyui-r/8166` | plate `80`, mask `123`, prompt `109.value` |
-| Edit Image Hi-res | Pix-Edit → Edit Image Hi-res... | `Edit_Image_Hi_res_v02.json` (alias `Edit_Image_Hi_res.json`) | `192.168.91.12:8166` via `:8600/comfyui-r/8166-12` | plate `164`, mask `167`, prompt `161.value`. If down: popup only, use Edit Image. |
+| Edit Image Hi-res | Pix-Edit → Edit Image Hi-res... | `Edit_Image_Hi_res_v03.json` (alias `Edit_Image_Hi_res.json`) | `192.168.91.12:8166` via `:8600/comfyui-r/8166-12` | plate `164`, mask `167`, prompt `161.value`. If down: popup only, use Edit Image. |
 | Image Gen | Pix-Edit → Image Gen... | `Image_generation_v01.json` | hub `:8177` | prompt `73.value` |
 | Image Description | Pix-Edit → Image Description... | `Image_Description_v01.json` | hub `:8177` | text `4`, LoadImage `5`, PreviewAny `12` |
 | Image to Video | Pix-Edit → Image to Video... | `video_minimax_h3_i2v.json` | (node may still be missing on backends) | LoadImage `114`, prompt `141.value` |

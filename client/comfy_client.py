@@ -28,7 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 NODE_LOAD_IMAGE = "80"  # plate_srgb.png (Edit_Image_v08)
 NODE_LOAD_MASK = "123"  # mask_luma.png (Edit_Image_v08)
 NODE_PROMPT = "109"  # PrimitiveStringMultiline (v08)
-NODE_HIRES_LOAD = "164"  # plate_srgb (Edit_Image_Hi_res_v02)
+NODE_HIRES_LOAD = "164"  # plate_srgb (Edit_Image_Hi_res_v03)
 NODE_HIRES_MASK = "167"  # mask_luma
 NODE_HIRES_PROMPT = "161"  # PrimitiveStringMultiline user input
 NODE_HIRES_LOAD_V01 = "278"
@@ -234,6 +234,7 @@ class ComfyClient:
         repo = here.parent
         for name in (
             "Edit_Image_v08.json",
+            "Edit_Image_Hi_res_v03.json",
             "Edit_Image_Hi_res_v02.json",
             "Edit_Image_Hi_res_v01.json",
             "Edit_Image_Hi_res.json",

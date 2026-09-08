@@ -10,7 +10,7 @@ Nuke artists use **HTTP only**. No Samba, no SSH, no share for code.
 
 1. **This hub is `192.168.91.11`.** Older docs still say `192.168.91.13` — ignore that IP on this machine.
 2. **Do not send Edit Image to `:8188`.** `Edit_Image_v08.json` needs WAS Node Suite (`Text Multiline`, `Mask Invert`), which exists only on **this hub’s `:8166`**. Routing Edit to `:8188` fails with `missing_node_type` on node **113** even when the artist prompt injected correctly into node **109**.
-2b. **Hi-res v02 runs on `192.168.91.12:8166`.** Route id **`8166-12`**. Inject: plate **164**, mask **167**, prompt **161.value**. If that box is down, Nuke pops: *Edit Image Hi-res is down — use Edit Image instead.* Do not fail over silently.
+2b. **Hi-res v03 runs on `192.168.91.12:8166`.** Route id **`8166-12`**. Inject: plate **164**, mask **167**, prompt **161.value**. If that box is down, Nuke pops: *Edit Image Hi-res is down — use Edit Image instead.* Do not fail over silently.
 3. **Do not run `start-comfyui-production.sh --port 8188`.** That script `pgrep`s `Comfyui-production/main.py` and will **SIGTERM the existing `:8177` instance**. Start `:8188` with the manual command in §2.3.
 4. **Do not `kill -9` CUDA processes** on this vGPU/MIG guest. Prefer SIGTERM. Hard-kill can leave the GPU `busy or unavailable` until a full VM power cycle.
 5. **Do not invent workflow node IDs.** Re-discover with `ComfyClient.load_workflow()` on the JSON on disk. Current inject (this repo, 2026-09-04): Edit v08 plate **80**, mask **123**, prompt **109.value**; Hi-res v02 plate **164**, mask **167**, prompt **161.value**; Image Description LoadImage **5**, user text **4**, PreviewAny **12**.
@@ -40,7 +40,7 @@ Both path spellings work. Prefer the symlink in commands so they match systemd.
 |------|---------|--------------|-------------|
 | **8600** | `serve_code.py` (read-only GET + ACL + Comfy proxy) | repo `server/` · system `python3` | Nuke bootstrap, admin, `/comfyui` proxy |
 | **8166** | ComfyUI **Edit** (this hub) | `Comfyui-Image-edit` · env `Comfyui-edit` | `Edit_Image_v08.json` |
-| **91.12:8166** | ComfyUI **Hi-res** | other box | `Edit_Image_Hi_res_v02.json` |
+| **91.12:8166** | ComfyUI **Hi-res** | other box | `Edit_Image_Hi_res_v03.json` |
 | **8177** | ComfyUI **Production** | `Comfyui-production` · env `Comfyui-production` | `Image_generation_v01.json`, `Image_Description_v01.json` |
 | **8188** | ComfyUI extra listener (same production tree, **own SQLite DB**) | `Comfyui-production` · env `Comfyui-production` | default `/comfyui` proxy, Ping, browser |
 
@@ -183,8 +183,9 @@ Live table: `workflow_routes.json` (mirrored into gitignored `studio_config.json
 | Workflow | Server id | Upstream | Why |
 |----------|-----------|----------|-----|
 | `Edit_Image_v08.json` | `8166` | `http://127.0.0.1:8166` | WAS Node Suite (`was-ns`) on this hub’s **edit** tree |
-| `Edit_Image_Hi_res_v02.json` | `8166-12` | `http://192.168.91.12:8166` | Hi-res v02 (plate 164 / mask 167 / prompt 161) |
-| `Edit_Image_Hi_res.json` | `8166-12` | same | alias of v02 |
+| `Edit_Image_Hi_res_v03.json` | `8166-12` | `http://192.168.91.12:8166` | Hi-res v03 (plate 164 / mask 167 / prompt 161) |
+| `Edit_Image_Hi_res_v02.json` | `8166-12` | same | legacy v02 |
+| `Edit_Image_Hi_res.json` | `8166-12` | same | alias of v03 |
 | `Edit_Image_Hi_res_v01.json` | `8166-12` | same | legacy hi-res |
 | `Image_generation_v01.json` | `8177` | `http://127.0.0.1:8177` | production gen |
 | `Image_Description_v01.json` | `8177` | `http://127.0.0.1:8177` | Ollama describe (nodes 4 / 5 / 12) |
@@ -254,7 +255,7 @@ Edit_Image_v08.json          → :8166 (this hub)
   LoadImage plate 80 | LoadImage mask 123 | prompt 109 value
   WAS-only: 113 Text Multiline, 132 Mask Invert
 
-Edit_Image_Hi_res_v02.json   → 192.168.91.12:8166  (id 8166-12)
+Edit_Image_Hi_res_v03.json   → 192.168.91.12:8166  (id 8166-12)
   LoadImage plate 164 | LoadImage mask 167 | prompt 161 value
   alias file: Edit_Image_Hi_res.json
   (v01 leftover: 278 / 297 / 290)
@@ -344,19 +345,19 @@ curl -sS -o /dev/null -w "8188=%{http_code}\n" http://192.168.91.11:8188/
 curl -sS -o /dev/null -w "8166=%{http_code}\n" http://127.0.0.1:8166/system_stats
 curl -sS -o /dev/null -w "8177=%{http_code}\n" http://127.0.0.1:8177/system_stats
 curl -sS -o /dev/null -w "proxy8166=%{http_code}\n" http://127.0.0.1:8600/comfyui-r/8166/system_stats
-curl -sS -o /tmp/hires_v02.json -w "hires_v02=%{http_code} bytes=%{size_download}\n" \
-  http://127.0.0.1:8600/Edit_Image_Hi_res_v02.json
+curl -sS -o /tmp/hires_v03.json -w "hires_v03=%{http_code} bytes=%{size_download}\n" \
+  http://127.0.0.1:8600/Edit_Image_Hi_res_v03.json
 
 python3 -c "
 from client.comfy_client import ComfyClient
 c=ComfyClient(workflow_path='Edit_Image_v08.json'); c.load_workflow()
 print('edit', c.id_load, c.id_load_mask, c.id_prompt, c.id_prompt_key)
-h=ComfyClient(workflow_path='Edit_Image_Hi_res_v02.json'); h.load_workflow()
+h=ComfyClient(workflow_path='Edit_Image_Hi_res_v03.json'); h.load_workflow()
 print('hires', h.id_load, h.id_load_mask, h.id_prompt, h.id_prompt_key)
 "
 ```
 
-Expect: health `ComfyNuke code server OK`, bootstrap **200**, Comfy **200**, `hires_v02=200` and size **> 1000** (10 bytes = `.forbidden` leak), edit inject `80 123 109 value`, hi-res `164 167 161 value`.
+Expect: health `ComfyNuke code server OK`, bootstrap **200**, Comfy **200**, `hires_v03=200` and size **> 1000** (10 bytes = `.forbidden` leak), edit inject `80 123 109 value`, hi-res `164 167 161 value`.
 
 Nuke: re-run the one-liner, **Pix-Edit → Ping Server**, then Edit Image. Script Editor should show `comfyui-r/8166` and `prompt=109.value`, then a new `ComfyEdit_Result_###` Read (GPU time).
 
