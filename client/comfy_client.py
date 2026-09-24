@@ -28,16 +28,23 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 NODE_LOAD_IMAGE = "80"  # plate_srgb.png (Edit_Image_v08)
 NODE_LOAD_MASK = "123"  # mask_luma.png (Edit_Image_v08)
 NODE_PROMPT = "109"  # PrimitiveStringMultiline (v08)
-NODE_HIRES_LOAD = "164"  # plate_srgb (Edit_Image_Hi_res_v03)
-NODE_HIRES_MASK = "167"  # mask_luma
-NODE_HIRES_PROMPT = "161"  # PrimitiveStringMultiline user input
+NODE_HIRES_LOAD = "500"  # plate Image_01 (Edit_Image_Hi_res_v04)
+NODE_HIRES_MASK = "499"  # mask luma
+NODE_HIRES_PROMPT = "494"  # Input - Prompt
+NODE_HIRES_LOAD_V03 = "164"
+NODE_HIRES_MASK_V03 = "167"
+NODE_HIRES_PROMPT_V03 = "161"
 NODE_HIRES_LOAD_V01 = "278"
 NODE_HIRES_MASK_V01 = "297"
 NODE_HIRES_PROMPT_V01 = "290"
-NODE_REF_LOAD = "151"  # plate (Edit_Image_Ref_Hi_res_v01)
+NODE_REF_LOAD = "151"  # plate (Edit_Image_Ref_Hi_res_v01 / low-res)
 NODE_REF_MASK = "188"  # mask_luma
 NODE_REF_IMAGE = "173"  # reference LoadImage
 NODE_REF_PROMPT = "181"  # User-Prompt
+NODE_REF_LOAD_V02 = "500"  # plate (Edit_Image_Ref_Hi_res_v02)
+NODE_REF_MASK_V02 = "499"  # mask
+NODE_REF_IMAGE_V02 = "510"  # reference
+NODE_REF_PROMPT_V02 = "509"  # User-Prompt
 NODE_SEED = "242"  # Seed (rgthree) — may differ; auto-discovered
 NODE_SAVE = "121"
 
@@ -64,6 +71,22 @@ def _find_all_node_ids(wf: Dict[str, Any], class_type: str) -> List[str]:
     ]
 
 
+NODE_HIRES_SAVE = "461"  # SaveImageAdvanced 8-bit PNG (Hi-res / Ref Hi-res)
+_SAVE_IMAGE_CLASSES = ("SaveImageAdvanced", "SaveImage")
+
+
+def _find_image_save_id(wf: Dict[str, Any]) -> Optional[str]:
+    """Prefer node 461 Save Image Advanced, then any SaveImageAdvanced / SaveImage."""
+    n461 = wf.get(NODE_HIRES_SAVE)
+    if isinstance(n461, dict) and n461.get("class_type") in _SAVE_IMAGE_CLASSES:
+        return NODE_HIRES_SAVE
+    for ct in _SAVE_IMAGE_CLASSES:
+        nid = _find_node_id(wf, ct)
+        if nid:
+            return nid
+    return None
+
+
 def _find_final_image_source(wf: Dict[str, Any]) -> Optional[Tuple[str, int]]:
     """
     Prefer InpaintStitchImproved / SmartImageStitcher / SaveImage input,
@@ -74,12 +97,13 @@ def _find_final_image_source(wf: Dict[str, Any]) -> Optional[Tuple[str, int]]:
         "InpaintStitchImproved",
         "SmartImageStitcher",
         "ImageStitch",
+        "SaveImageAdvanced",
         "SaveImage",
     ):
         nid = _find_node_id(wf, ct)
-        if nid and ct != "SaveImage":
+        if nid and ct not in _SAVE_IMAGE_CLASSES:
             return (nid, 0)
-        if nid and ct == "SaveImage":
+        if nid and ct in _SAVE_IMAGE_CLASSES:
             inp = (wf[nid].get("inputs") or {}).get("images")
             if isinstance(inp, list) and len(inp) >= 2:
                 return (str(inp[0]), int(inp[1]))
@@ -239,7 +263,9 @@ class ComfyClient:
         repo = here.parent
         for name in (
             "Edit_Image_v08.json",
+            "Edit_Image_Hi_res_v04.json",
             "Edit_Image_Hi_res_v03.json",
+            "Edit_Image_Ref_Hi_res_v02.json",
             "Edit_Image_Ref_Hi_res_v01.json",
             "Edit_Image_Hi_res_v02.json",
             "Edit_Image_Hi_res_v01.json",
@@ -337,17 +363,19 @@ class ComfyClient:
         # Older graphs: single LoadImage (RGBA with alpha)
         self.id_load, self.id_load_mask = self._resolve_load_image_nodes(data)
         self.id_load_ref = None
-        if NODE_REF_IMAGE in data and data.get(NODE_REF_IMAGE, {}).get("class_type") == "LoadImage":
-            self.id_load_ref = NODE_REF_IMAGE
+        for rid in (NODE_REF_IMAGE_V02, NODE_REF_IMAGE):
+            if rid in data and data.get(rid, {}).get("class_type") == "LoadImage":
+                self.id_load_ref = rid
+                break
 
-        # User prompt: Ref 181, Hi-res 161, v01 290, then v08 109, else auto-discover
+        # User prompt: Ref v02 509, Hi-res v04 494, Ref 181, Hi-res v03 161
         if (
-            NODE_REF_PROMPT in data
-            and isinstance(data.get(NODE_REF_PROMPT), dict)
-            and data[NODE_REF_PROMPT].get("class_type") == "PrimitiveStringMultiline"
-            and isinstance((data[NODE_REF_PROMPT].get("inputs") or {}).get("value"), str)
+            NODE_REF_PROMPT_V02 in data
+            and isinstance(data.get(NODE_REF_PROMPT_V02), dict)
+            and data[NODE_REF_PROMPT_V02].get("class_type") == "PrimitiveStringMultiline"
+            and isinstance((data[NODE_REF_PROMPT_V02].get("inputs") or {}).get("value"), str)
         ):
-            self.id_prompt = NODE_REF_PROMPT
+            self.id_prompt = NODE_REF_PROMPT_V02
             self.id_prompt_key = "value"
         elif (
             NODE_HIRES_PROMPT in data
@@ -356,6 +384,22 @@ class ComfyClient:
             and isinstance((data[NODE_HIRES_PROMPT].get("inputs") or {}).get("value"), str)
         ):
             self.id_prompt = NODE_HIRES_PROMPT
+            self.id_prompt_key = "value"
+        elif (
+            NODE_REF_PROMPT in data
+            and isinstance(data.get(NODE_REF_PROMPT), dict)
+            and data[NODE_REF_PROMPT].get("class_type") == "PrimitiveStringMultiline"
+            and isinstance((data[NODE_REF_PROMPT].get("inputs") or {}).get("value"), str)
+        ):
+            self.id_prompt = NODE_REF_PROMPT
+            self.id_prompt_key = "value"
+        elif (
+            NODE_HIRES_PROMPT_V03 in data
+            and isinstance(data.get(NODE_HIRES_PROMPT_V03), dict)
+            and data[NODE_HIRES_PROMPT_V03].get("class_type") == "PrimitiveStringMultiline"
+            and isinstance((data[NODE_HIRES_PROMPT_V03].get("inputs") or {}).get("value"), str)
+        ):
+            self.id_prompt = NODE_HIRES_PROMPT_V03
             self.id_prompt_key = "value"
         elif (
             NODE_HIRES_PROMPT_V01 in data
@@ -461,7 +505,7 @@ class ComfyClient:
             self.id_seed = NODE_SEED
             self.id_seed_key = "seed"
 
-        self.id_save = _find_node_id(data, "SaveImage")
+        self.id_save = _find_image_save_id(data)
         self.id_crop = (
             _find_node_id(data, "SmartImageCrop")
             or _find_node_id(data, "InpaintCropImproved")
@@ -482,12 +526,15 @@ class ComfyClient:
         if not load_ids:
             return None, None
 
-        # Ref Hi-res: 151 plate, 188 mask (173 is the extra reference image)
+        # Hi-res v04: 500 plate, 499 mask
+        if NODE_HIRES_LOAD in load_ids and NODE_HIRES_MASK in load_ids:
+            return NODE_HIRES_LOAD, NODE_HIRES_MASK
+        # Ref Hi-res v01 / low-res: 151 plate, 188 mask (173 is extra reference)
         if NODE_REF_LOAD in load_ids and NODE_REF_MASK in load_ids:
             return NODE_REF_LOAD, NODE_REF_MASK
         # Hi-res v03: 164 plate_srgb, 167 mask_luma
-        if NODE_HIRES_LOAD in load_ids and NODE_HIRES_MASK in load_ids:
-            return NODE_HIRES_LOAD, NODE_HIRES_MASK
+        if NODE_HIRES_LOAD_V03 in load_ids and NODE_HIRES_MASK_V03 in load_ids:
+            return NODE_HIRES_LOAD_V03, NODE_HIRES_MASK_V03
         # Hi-res v01: 278 / 297
         if NODE_HIRES_LOAD_V01 in load_ids and NODE_HIRES_MASK_V01 in load_ids:
             return NODE_HIRES_LOAD_V01, NODE_HIRES_MASK_V01
@@ -737,8 +784,9 @@ class ComfyClient:
         self._last_filename_prefix = prefix
 
         # Ensure a downloadable saver exists in history (/view):
-        # image workflows → SaveImage; video (i2v) → SaveVideo / VHS / CreateVideo
-        save_id = _find_node_id(wf, "SaveImage")
+        # Hi-res / Ref Hi-res → node 461 SaveImageAdvanced (8-bit PNG, RGBA)
+        # other image graphs → SaveImage; video (i2v) → SaveVideo / VHS
+        save_id = _find_image_save_id(wf)
         video_saver_ids = [
             str(nid)
             for nid, node in wf.items()
@@ -769,6 +817,22 @@ class ComfyClient:
         elif save_id:
             self.id_save = save_id
             _set(save_id, "filename_prefix", prefix)
+            # Qwen Image 2.1 b16 can emit RGBA — save 8-bit PNG (not 16-bit).
+            ct = (wf.get(save_id) or {}).get("class_type") or ""
+            if ct == "SaveImageAdvanced":
+                inp = wf[save_id].setdefault("inputs", {})
+                if not isinstance(inp.get("format"), list):
+                    inp["format"] = "png"
+                if not isinstance(inp.get("format.bit_depth"), list):
+                    inp["format.bit_depth"] = "8-bit"
+                if "format.include_alpha" in inp and not isinstance(
+                    inp.get("format.include_alpha"), list
+                ):
+                    inp["format.include_alpha"] = True
+                if "include_alpha" in inp and not isinstance(
+                    inp.get("include_alpha"), list
+                ):
+                    inp["include_alpha"] = True
         elif video_saver_ids:
             # MiniMax / i2v: SaveVideo already in graph — do not inject SaveImage
             self.id_save = video_saver_ids[0]
@@ -1029,7 +1093,9 @@ class ComfyClient:
                     continue
                 for item in val:
                     if isinstance(item, dict) and item.get("filename"):
-                        files.append(item)
+                        rec = dict(item)
+                        rec["_node_id"] = str(_node_id)
+                        files.append(rec)
         return files
 
     @staticmethod
@@ -1120,21 +1186,26 @@ class ComfyClient:
     def prefer_output_file(
         files: list,
         prefer_token: Optional[str] = None,
+        prefer_node: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Prefer this job's output (token match), then video (i2v), EXR, PNG.
-        Prefer type=output over temp/preview to avoid low-quality previews.
+        Prefer this job's output (token match), then saver node 461 / SaveImageAdvanced,
+        then video (i2v), EXR, PNG. Prefer type=output over temp/preview.
         """
         if not files:
             raise ComfyError("No output files in history")
 
         token = (prefer_token or "").lower().strip()
+        want_node = str(prefer_node or NODE_HIRES_SAVE)
 
         def score(f: Dict[str, Any]) -> tuple:
             name = (f.get("filename") or "").lower()
             sub = (f.get("subfolder") or "").replace("\\", "/").lower()
             path = f"{sub}/{name}" if sub else name
             typ = (f.get("type") or "").lower()
+            nid = str(f.get("_node_id") or "")
+            is_save = 0 if nid == want_node else 1
+            is_png = 0 if name.endswith(".png") else 1
             is_vid = 0 if name.endswith(
                 (".mp4", ".webm", ".mov", ".mkv", ".avi", ".gif")
             ) else 1
@@ -1154,7 +1225,7 @@ class ComfyClient:
                 match = 1
             else:
                 match = 0
-            return (match, is_out, is_preview, is_vid, is_exr, name)
+            return (match, is_save, is_out, is_preview, is_png, is_vid, is_exr, name)
 
         ranked = sorted(files, key=score)
         best = ranked[0]

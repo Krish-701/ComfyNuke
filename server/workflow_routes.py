@@ -20,10 +20,13 @@ _ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,47}$")
 KNOWN_WORKFLOWS = (
     "Edit_Image_v08.json",
     "Edit_Image_Hi_res.json",
+    "Edit_Image_Hi_res_v04.json",
     "Edit_Image_Hi_res_v03.json",
     "Edit_Image_Hi_res_v02.json",
     "Edit_Image_Hi_res_v01.json",
+    "Edit_Image_Ref_Hi_res_v02.json",
     "Edit_Image_Ref_Hi_res_v01.json",
+
     "Image_generation_v01.json",
     "Image_Description_v01.json",
     "video_minimax_h3_i2v.json",
