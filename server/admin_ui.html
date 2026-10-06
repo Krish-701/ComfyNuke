@@ -520,7 +520,7 @@
           </div>
           <div id="logMsg"></div>
           <h2 style="margin-top:16px">Workflows — runs and duration</h2>
-          <p class="hint">How many times each workflow ran in this range, total GPU/time, and how many people used it.</p>
+          <p class="hint">Counts are by <b>Nuke menu</b> (Edit Image, Edit Image Hi-res, Ref Hi-res, …), not JSON version. Updating <code>Edit_Image_Hi_res_v04.json</code> to v05 still counts as Edit Image Hi-res.</p>
           <div class="log-table-wrap" style="margin-top:10px">
             <table>
               <thead>
@@ -1910,7 +1910,7 @@
           <td>${esc(r.group || "—")}</td>
           <td class="mono">${esc(r.ip || "")}</td>
           <td class="mono">${esc(r.machine_id || "—")}</td>
-          <td class="mono">${esc(r.workflow || "—")}</td>
+          <td class="mono">${esc(r.tool || r.workflow || "—")}</td>
           <td class="mono">${esc((r.method || "") + " " + (r.path || ""))}</td>
           <td>${esc(r.status ?? "")}</td>
           <td>${r.runtime_sec != null ? esc(fmtSec(r.runtime_sec)) : (r.duration_ms != null ? esc(r.duration_ms + "ms") : "—")}</td>

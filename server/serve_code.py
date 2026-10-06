@@ -55,6 +55,7 @@ from usage_log import (  # noqa: E402
     UsageLog,
     classify_comfy_path,
     infer_workflow,
+    infer_nuke_tool,
     parse_history_completion,
     parse_prompt_id_from_queue_response,
     EVENT_ACCESS_DENIED,
@@ -1001,12 +1002,22 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 client_id = ""
                 detail = "queued"
                 prompt = {}
+                extra = {}
+                wf_hint = ""
                 if body_in:
                     try:
                         payload = json.loads(body_in.decode("utf-8"))
                         client_id = str(payload.get("client_id") or "")
                         # light hint from filename_prefix if present in prompt graph
                         prompt = payload.get("prompt") or {}
+                        extra = payload.get("extra_data") or {}
+                        wf_hint = ""
+                        if isinstance(extra, dict):
+                            wf_hint = str(
+                                extra.get("workflow_file")
+                                or extra.get("workflow")
+                                or ""
+                            )
                         for node in prompt.values() if isinstance(prompt, dict) else []:
                             if not isinstance(node, dict):
                                 continue
@@ -1015,10 +1026,21 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                                 detail = "prefix=" + pref[:80]
                                 break
                     except Exception:
-                        pass
+                        extra = {}
+                        wf_hint = ""
                 if pid:
                     wf_name = infer_workflow(
                         prompt if isinstance(prompt, dict) else None,
+                        client_id=client_id,
+                        detail=detail,
+                        extra=extra if isinstance(extra, dict) else None,
+                        repo_root=self._repo_root(),
+                    )
+                    if not wf_name and wf_hint:
+                        wf_name = str(wf_hint).replace("\\", "/").split("/")[-1]
+                    tool = infer_nuke_tool(
+                        workflow=wf_name,
+                        extra=extra if isinstance(extra, dict) else None,
                         client_id=client_id,
                         detail=detail,
                     )
@@ -1031,6 +1053,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                         client_id=client_id,
                         detail=detail,
                         workflow=wf_name,
+                        tool=tool,
                     )
                 else:
                     self.usage.log(event=EVENT_API, detail="prompt_no_id", **base)
@@ -1501,7 +1524,7 @@ def main() -> int:
         pkg_ver = "(could not build: %s)" % e
 
     usage_path = root / "server" / "usage_logs.jsonl"
-    usage = UsageLog(usage_path)
+    usage = UsageLog(usage_path, repo_root=root)
 
     # Bind access + comfy onto handler class (shared by threads)
     ComfyNukeHandler.access = access

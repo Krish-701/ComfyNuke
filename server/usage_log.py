@@ -31,60 +31,240 @@ EVENT_API = "api"
 EVENT_LOGIN = "admin_login"
 
 
-def infer_workflow(prompt: Any = None, client_id: str = "", detail: str = "") -> str:
-    """Best-effort workflow filename from the queued graph / Nuke client_id."""
+_WF_NAME_PREFIXES = ("Edit_Image", "Image_", "video_")
+_WF_SKIP = {
+    "studio_config.json",
+    "studio_config.example.json",
+    "workflow_routes.json",
+    "package.json",
+}
+
+
+def list_workflow_catalog(repo_root: Optional[Path] = None) -> List[str]:
+    """Every workflow JSON we know: disk + workflow_routes.json. New files appear automatically."""
+    names = set()
+    root = Path(repo_root) if repo_root else None
+    if root and root.is_dir():
+        for p in root.glob("*.json"):
+            n = p.name
+            if n in _WF_SKIP:
+                continue
+            if n.startswith(_WF_NAME_PREFIXES):
+                names.add(n)
+        routes = root / "workflow_routes.json"
+        if routes.is_file():
+            try:
+                wr = json.loads(routes.read_text(encoding="utf-8"))
+                for w in wr.get("workflows") or []:
+                    f = str((w or {}).get("file") or "").strip()
+                    if f.endswith(".json"):
+                        names.add(f)
+            except Exception:
+                pass
+    return sorted(names)
+
+
+def _graph_node_ids(prompt: Any) -> set:
+    if not isinstance(prompt, dict):
+        return set()
+    out = set()
+    for k, v in prompt.items():
+        if isinstance(v, dict) and v.get("class_type"):
+            out.add(str(k))
+    return out
+
+
+_GRAPH_CACHE: Dict[str, Tuple[float, List[Tuple[str, set]]]] = {}
+
+
+def _catalog_graphs(repo_root: Optional[Path]) -> List[Tuple[str, set]]:
+    if not repo_root:
+        return []
+    root = Path(repo_root)
+    key = str(root)
+    try:
+        mtime = max(
+            (p.stat().st_mtime for p in root.glob("*.json") if p.is_file()),
+            default=0.0,
+        )
+    except Exception:
+        mtime = 0.0
+    cached = _GRAPH_CACHE.get(key)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    graphs: List[Tuple[str, set]] = []
+    for name in list_workflow_catalog(root):
+        p = root / name
+        if not p.is_file():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        ids = _graph_node_ids(data)
+        if len(ids) >= 3:
+            graphs.append((name, ids))
+    _GRAPH_CACHE[key] = (mtime, graphs)
+    return graphs
+
+
+def _match_prompt_to_catalog(prompt: Any, repo_root: Optional[Path]) -> str:
+    p_ids = _graph_node_ids(prompt)
+    if len(p_ids) < 3:
+        return ""
+    graphs = _catalog_graphs(repo_root)
+    if not graphs:
+        return ""
+    scored = []
+    for name, ids in graphs:
+        overlap = len(p_ids & ids)
+        if overlap < 3:
+            continue
+        others = set()
+        for n2, ids2 in graphs:
+            if n2 != name:
+                others |= ids2
+        unique = ids - others
+        unique_hit = len(unique & p_ids)
+        score = unique_hit * 1000 + overlap
+        scored.append((score, overlap, unique_hit, name))
+    if not scored:
+        return ""
+    scored.sort(reverse=True)
+    top = scored[0]
+    if top[2] > 0 or top[1] >= 8:
+        return top[3]
+    return ""
+
+
+def _safe_workflow_filename(name: str) -> str:
+    n = str(name or "").strip().replace("\\", "/").split("/")[-1]
+    if not n.endswith(".json"):
+        return ""
+    if ".." in n or "/" in n:
+        return ""
+    return n
+
+
+def infer_workflow(
+    prompt: Any = None,
+    client_id: str = "",
+    detail: str = "",
+    extra: Any = None,
+    repo_root: Optional[Path] = None,
+) -> str:
+    """Workflow filename from extra_data, graph match against all JSON on disk, then hints."""
+    if isinstance(extra, dict):
+        for key in ("workflow_file", "workflow", "file"):
+            n = _safe_workflow_filename(str(extra.get(key) or ""))
+            if n:
+                return n
+        png = extra.get("extra_pnginfo")
+        if isinstance(png, dict):
+            n = _safe_workflow_filename(str(png.get("workflow_file") or png.get("file") or ""))
+            if n:
+                return n
     cid = str(client_id or "").lower()
     det = str(detail or "").lower()
     blob = cid + " " + det
-    if "nuke-desc" in blob or "describe" in blob:
+    if "nuke-desc" in blob or ("describe" in blob and "nuke" in blob):
         return "Image_Description_v01.json"
     if "nuke-t2i" in blob or "/t2i_" in blob or " t2i_" in blob:
         return "Image_generation_v01.json"
-    if "nuke-i2v" in blob or "i2v" in blob:
+    if "nuke-i2v" in blob:
         return "video_minimax_h3_i2v.json"
-    if cid.startswith("nuke-") and "nuke-t2i" not in cid and "nuke-desc" not in cid:
-        return "Edit_Image_v08.json"
-    if isinstance(prompt, dict) and prompt:
-        nodes = {str(k) for k in prompt.keys()}
-        types = [
-            str((v or {}).get("class_type") or "")
-            for v in prompt.values()
-            if isinstance(v, dict)
-        ]
-        if "OllamaGenerateV2" in types or (
-            {"4", "5", "8", "12"} <= nodes and "LoadImage" in types
-        ):
-            return "Image_Description_v01.json"
-        if "73" in nodes and ("29" in nodes or "52" in nodes):
-            return "Image_generation_v01.json"
-        if "500" in nodes and "499" in nodes and "510" in nodes:
-            return "Edit_Image_Ref_Hi_res_v02.json"
-        if "500" in nodes and "499" in nodes:
-            return "Edit_Image_Hi_res_v04.json"
-        if "151" in nodes and "173" in nodes and "188" in nodes:
-            return "Edit_Image_Ref_Hi_res_v01.json"
-        if "164" in nodes and "167" in nodes:
-            return "Edit_Image_Hi_res_v03.json"
-        if "278" in nodes and "297" in nodes:
-            return "Edit_Image_Hi_res_v01.json"
-        if "80" in nodes and "123" in nodes:
-            return "Edit_Image_v08.json"
-        if any("minimax" in t.lower() or "vhs" in t.lower() for t in types):
-            return "video_minimax_h3_i2v.json"
-        if "109" in nodes:
-            return "Edit_Image_v08.json"
-    blob = cid + " " + det
+    matched = _match_prompt_to_catalog(prompt, repo_root)
+    if matched:
+        return matched
     if "desc" in blob:
         return "Image_Description_v01.json"
     if "t2i" in blob:
         return "Image_generation_v01.json"
+    if "i2v" in blob:
+        return "video_minimax_h3_i2v.json"
+    return ""
+
+
+CORE_NUKE_TOOLS = (
+    "Edit Image",
+    "Edit Image Hi-res",
+    "Edit Image Ref Hi-res",
+    "Image Gen",
+    "Image Description",
+    "Image to Video",
+)
+
+
+def nuke_tool_from_filename(name: str) -> str:
+    """
+    Map any JSON version to the Nuke menu tool.
+    Edit_Image_Hi_res_v04.json and v05.json both count as "Edit Image Hi-res".
+    """
+    raw = str(name or "").strip()
+    if not raw or raw == "(unknown)":
+        return ""
+    b = raw.replace(" ", "_").replace("-", "_").lower()
+    if b.endswith(".json"):
+        b = b[:-5]
+    if "low_res" in b or "lowres" in b:
+        return ""
+    if "ref" in b and ("hi_res" in b or "hires" in b):
+        return "Edit Image Ref Hi-res"
+    if "hi_res" in b or "hires" in b:
+        return "Edit Image Hi-res"
+    if b.startswith("edit_image"):
+        return "Edit Image"
+    if "description" in b or "describe" in b:
+        return "Image Description"
+    if "generation" in b or b.startswith("image_gen"):
+        return "Image Gen"
+    if "upscale" in b:
+        return "Image Upscale"
+    if "video" in b or "i2v" in b or "minimax" in b:
+        return "Image to Video"
+    parts = [
+        p
+        for p in b.split("_")
+        if p and not (len(p) >= 2 and p[0] == "v" and p[1:].isdigit())
+    ]
+    pretty = " ".join(p.capitalize() if p.isalpha() else p for p in parts)
+    return pretty
+
+
+def infer_nuke_tool(
+    *,
+    workflow: str = "",
+    extra: Any = None,
+    client_id: str = "",
+    detail: str = "",
+) -> str:
+    if isinstance(extra, dict):
+        t = str(extra.get("nuke_tool") or extra.get("tool") or "").strip()
+        if t:
+            return t
+    t = nuke_tool_from_filename(workflow)
+    if t:
+        return t
+    blob = (str(client_id or "") + " " + str(detail or "")).lower()
+    if "nuke-desc" in blob or "describe" in blob:
+        return "Image Description"
+    if "nuke-t2i" in blob or "t2i" in blob:
+        return "Image Gen"
+    if "nuke-i2v" in blob or "i2v" in blob:
+        return "Image to Video"
     return ""
 
 
 class UsageLog:
-    def __init__(self, path: Path, max_lines: int = 200_000):
+    def __init__(
+        self,
+        path: Path,
+        max_lines: int = 200_000,
+        repo_root: Optional[Path] = None,
+    ):
         self.path = Path(path)
         self.max_lines = max_lines
+        self.repo_root = Path(repo_root) if repo_root else self.path.parent.parent
         self._lock = threading.RLock()
         # In-memory open jobs: prompt_id -> start record
         self._open_jobs: Dict[str, Dict[str, Any]] = {}
@@ -145,7 +325,9 @@ class UsageLog:
         client_id: str = "",
         detail: str = "",
         workflow: str = "",
+        tool: str = "",
     ) -> Dict[str, Any]:
+        tool = (tool or infer_nuke_tool(workflow=workflow, client_id=client_id, detail=detail) or "")
         rec = self.log(
             event=EVENT_JOB_QUEUE,
             ip=ip,
@@ -159,6 +341,7 @@ class UsageLog:
             client_id=client_id,
             detail=detail or "queued",
             workflow=workflow or "",
+            tool=tool,
         )
         with self._lock:
             self._open_jobs[str(prompt_id)] = {
@@ -169,6 +352,7 @@ class UsageLog:
                 "group": group,
                 "client_id": client_id,
                 "workflow": workflow or "",
+                "tool": tool,
             }
         return rec
 
@@ -213,6 +397,10 @@ class UsageLog:
             duration_ms=int(runtime * 1000),
             detail=detail or status,
             workflow=start.get("workflow") or "",
+            tool=start.get("tool") or infer_nuke_tool(
+                workflow=str(start.get("workflow") or ""),
+                client_id=str(start.get("client_id") or ""),
+            ),
         )
 
     def iter_records(
@@ -315,6 +503,8 @@ class UsageLog:
                         None,
                         client_id=str(r.get("client_id") or ""),
                         detail=str(r.get("detail") or ""),
+                        extra=r.get("extra"),
+                        repo_root=self.repo_root,
                     )
                     if guessed:
                         r = dict(r)
@@ -357,9 +547,20 @@ class UsageLog:
                     None,
                     client_id=str(r.get("client_id") or ""),
                     detail=str(r.get("detail") or ""),
+                    extra=r.get("extra"),
+                    repo_root=self.repo_root,
                 )
                 if guessed:
                     r["workflow"] = guessed
+            if not r.get("tool"):
+                t = infer_nuke_tool(
+                    workflow=str(r.get("workflow") or ""),
+                    extra=r.get("extra"),
+                    client_id=str(r.get("client_id") or ""),
+                    detail=str(r.get("detail") or ""),
+                )
+                if t:
+                    r["tool"] = t
             totals["events"] += 1
             ev = str(r.get("event") or "")
             k = key_for(r)
@@ -407,7 +608,9 @@ class UsageLog:
             u["bytes_in"] += int(r.get("bytes_in") or 0)
             u["bytes_out"] += int(r.get("bytes_out") or 0)
 
-            wf_name = str(r.get("workflow") or "").strip()
+            wf_name = str(r.get("tool") or "").strip() or nuke_tool_from_filename(
+                str(r.get("workflow") or "")
+            )
             if ev in (EVENT_JOB_QUEUE, EVENT_JOB_DONE, EVENT_JOB_ERROR) and wf_name:
                 wc = u.setdefault("workflow_counts", {})
                 slot = wc.setdefault(
@@ -464,7 +667,7 @@ class UsageLog:
             names = []
             for wname, info in ranked:
                 info = info or {}
-                n = wname[:-5] if wname.endswith(".json") else wname
+                n = wname[:-5] if str(wname).endswith(".json") else wname
                 jd = int(info.get("jobs_done") or 0)
                 jq = int(info.get("jobs_queued") or 0)
                 show = jd or jq
@@ -481,21 +684,32 @@ class UsageLog:
         totals["total_runtime_sec"] = round(float(totals["total_runtime_sec"]), 2)
 
         by_wf: Dict[str, Dict[str, Any]] = {}
+
+        def _empty_wf(name: str) -> Dict[str, Any]:
+            return {
+                "workflow": name,
+                "jobs_queued": 0,
+                "jobs_done": 0,
+                "jobs_error": 0,
+                "total_runtime_sec": 0.0,
+                "avg_runtime_sec": 0.0,
+                "people": 0,
+            }
+
+        for name in CORE_NUKE_TOOLS:
+            by_wf[name] = _empty_wf(name)
+        for fname in list_workflow_catalog(self.repo_root):
+            t = nuke_tool_from_filename(fname)
+            if t:
+                by_wf.setdefault(t, _empty_wf(t))
         for r in rows:
             ev = str(r.get("event") or "")
-            wf = str(r.get("workflow") or "").strip() or "(unknown)"
-            w = by_wf.setdefault(
-                wf,
-                {
-                    "workflow": wf,
-                    "jobs_queued": 0,
-                    "jobs_done": 0,
-                    "jobs_error": 0,
-                    "total_runtime_sec": 0.0,
-                    "avg_runtime_sec": 0.0,
-                    "people": 0,
-                },
+            wf = (
+                str(r.get("tool") or "").strip()
+                or nuke_tool_from_filename(str(r.get("workflow") or ""))
+                or "(unknown)"
             )
+            w = by_wf.setdefault(wf, _empty_wf(wf))
             if ev == EVENT_JOB_QUEUE:
                 w["jobs_queued"] += 1
             elif ev == EVENT_JOB_DONE:
@@ -508,7 +722,11 @@ class UsageLog:
             ev = str(r.get("event") or "")
             if ev not in (EVENT_JOB_QUEUE, EVENT_JOB_DONE, EVENT_JOB_ERROR):
                 continue
-            wf = str(r.get("workflow") or "").strip() or "(unknown)"
+            wf = (
+                str(r.get("tool") or "").strip()
+                or nuke_tool_from_filename(str(r.get("workflow") or ""))
+                or "(unknown)"
+            )
             who = (
                 str(r.get("machine_id") or "")
                 or str(r.get("ip") or "")
@@ -527,8 +745,11 @@ class UsageLog:
             workflows.append(w)
         workflows.sort(
             key=lambda x: (
+                str(x.get("workflow") or "") == "(unknown)",
                 -int(x.get("jobs_done") or 0),
+                -int(x.get("jobs_queued") or 0),
                 -float(x.get("total_runtime_sec") or 0),
+                str(x.get("workflow") or ""),
             )
         )
         totals["workflows"] = len(
@@ -606,6 +827,7 @@ class UsageLog:
                 "prompt_id",
                 "client_id",
                 "workflow",
+                "tool",
                 "runtime_sec",
                 "duration_ms",
                 "bytes_in",

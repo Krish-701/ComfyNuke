@@ -52,6 +52,30 @@ _JOB_LOCK = threading.Lock()
 _JOB_BUSY = False
 
 
+def _nuke_tool_from_filename(name: str) -> str:
+    """Stable Nuke menu name so v04/v05 of the same tool count together."""
+    b = str(name or "").replace(" ", "_").replace("-", "_").lower()
+    if b.endswith(".json"):
+        b = b[:-5]
+    if "low_res" in b or "lowres" in b:
+        return ""
+    if "ref" in b and ("hi_res" in b or "hires" in b):
+        return "Edit Image Ref Hi-res"
+    if "hi_res" in b or "hires" in b:
+        return "Edit Image Hi-res"
+    if b.startswith("edit_image"):
+        return "Edit Image"
+    if "description" in b or "describe" in b:
+        return "Image Description"
+    if "generation" in b or b.startswith("image_gen"):
+        return "Image Gen"
+    if "upscale" in b:
+        return "Image Upscale"
+    if "video" in b or "i2v" in b or "minimax" in b:
+        return "Image to Video"
+    return ""
+
+
 class ComfyError(RuntimeError):
     """Raised on ComfyUI HTTP / validation / job failures."""
 
@@ -1017,9 +1041,14 @@ class ComfyClient:
             _JOB_LOCK.release()
 
     def queue_prompt(self, workflow: Dict[str, Any]) -> str:
+        wf_name = Path(self.workflow_path or "").name
         payload = {
             "prompt": workflow,
             "client_id": self.client_id,
+            "extra_data": {
+                "workflow_file": wf_name,
+                "nuke_tool": _nuke_tool_from_filename(wf_name),
+            },
         }
         result = self._post_json("/prompt", payload)
         if "error" in result:
