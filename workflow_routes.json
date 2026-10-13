@@ -70,6 +70,11 @@
       "notes": ""
     },
     {
+      "file": "Image_outpaint_v01.json",
+      "server_id": "8166-12",
+      "notes": "Outpaint: plate 13, prompt 73, SaveImageAdvanced 110 on 192.168.91.12:8166"
+    },
+    {
       "file": "Image_Description_v01.json",
       "server_id": "8177",
       "notes": "Ollama describe: user text node 4, LoadImage 5, PreviewAny 12"

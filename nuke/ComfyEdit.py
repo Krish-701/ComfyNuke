@@ -93,24 +93,43 @@ else:
     REPO_ROOT = os.path.normpath(os.path.join(_THIS_DIR, ".."))
 
 CLIENT_DIR = os.path.join(REPO_ROOT, "client")
+WORKFLOWS_DIR = os.path.join(REPO_ROOT, "Workflows")
 _STUDIO = _load_studio_config(REPO_ROOT)
 
-DEFAULT_WORKFLOW = os.path.join(REPO_ROOT, "Edit_Image_v08.json").replace("\\", "/")
+
+def _workflow_file(name):
+    """Live graphs live in Workflows/. Older artist caches may still have the repo-root copy."""
+    base = os.path.basename(str(name or "").replace("\\", "/"))
+    for folder in (WORKFLOWS_DIR, REPO_ROOT):
+        p = os.path.join(folder, base)
+        if os.path.isfile(p):
+            return p.replace("\\", "/")
+    return os.path.join(WORKFLOWS_DIR, base).replace("\\", "/")
+
+
+def _first_workflow(names):
+    for name in names:
+        for folder in (WORKFLOWS_DIR, REPO_ROOT):
+            p = os.path.join(folder, name)
+            if os.path.isfile(p):
+                return p.replace("\\", "/")
+    return _workflow_file(names[0])
+
+
+DEFAULT_WORKFLOW = _workflow_file("Edit_Image_v08.json")
 
 
 def _latest_hires_workflow_path():
-    """Prefer v04; fall back to v03 / alias / older."""
-    for name in (
-        "Edit_Image_Hi_res_v04.json",
-        "Edit_Image_Hi_res.json",
-        "Edit_Image_Hi_res_v03.json",
-        "Edit_Image_Hi_res_v02.json",
-        "Edit_Image_Hi_res_v01.json",
-    ):
-        p = os.path.join(REPO_ROOT, name)
-        if os.path.isfile(p):
-            return p.replace("\\", "/")
-    return os.path.join(REPO_ROOT, "Edit_Image_Hi_res_v04.json").replace("\\", "/")
+    """Prefer v04; fall back to the alias, then older graphs."""
+    return _first_workflow(
+        (
+            "Edit_Image_Hi_res_v04.json",
+            "Edit_Image_Hi_res.json",
+            "Edit_Image_Hi_res_v03.json",
+            "Edit_Image_Hi_res_v02.json",
+            "Edit_Image_Hi_res_v01.json",
+        )
+    )
 
 
 EDIT_HIRES_WORKFLOW = _latest_hires_workflow_path()
@@ -128,14 +147,12 @@ EDIT_HIRES_LOAD_V01 = "278"
 EDIT_HIRES_MASK_V01 = "297"
 EDIT_HIRES_PROMPT_V01 = "290"
 def _latest_ref_hires_workflow_path():
-    for name in (
-        "Edit_Image_Ref_Hi_res_v02.json",
-        "Edit_Image_Ref_Hi_res_v01.json",
-    ):
-        p = os.path.join(REPO_ROOT, name)
-        if os.path.isfile(p):
-            return p.replace("\\", "/")
-    return os.path.join(REPO_ROOT, "Edit_Image_Ref_Hi_res_v02.json").replace("\\", "/")
+    return _first_workflow(
+        (
+            "Edit_Image_Ref_Hi_res_v02.json",
+            "Edit_Image_Ref_Hi_res_v01.json",
+        )
+    )
 
 
 EDIT_REF_HIRES_WORKFLOW = _latest_ref_hires_workflow_path()
@@ -147,13 +164,14 @@ EDIT_REF_LOAD_V02 = "500"  # plate
 EDIT_REF_MASK_V02 = "499"  # mask luma
 EDIT_REF_IMAGE_V02 = "510"  # reference
 EDIT_REF_PROMPT_V02 = "509"  # User-Prompt
-IMAGE_GEN_WORKFLOW = os.path.join(REPO_ROOT, "Image_generation_v01.json").replace(
-    "\\", "/"
-)
-I2V_WORKFLOW = os.path.join(REPO_ROOT, "video_minimax_h3_i2v.json").replace("\\", "/")
-IMAGE_DESC_WORKFLOW = os.path.join(REPO_ROOT, "Image_Description_v01.json").replace(
-    "\\", "/"
-)
+IMAGE_GEN_WORKFLOW = _workflow_file("Image_generation_v01.json")
+I2V_WORKFLOW = _workflow_file("video_minimax_h3_i2v.json")
+IMAGE_DESC_WORKFLOW = _workflow_file("Image_Description_v01.json")
+IMAGE_OUTPAINT_WORKFLOW = _workflow_file("Image_outpaint_v01.json")
+IMAGE_OUTPAINT_LOAD = "13"
+IMAGE_OUTPAINT_PROMPT = "73"
+IMAGE_OUTPAINT_SAVE = "110"
+IMAGE_OUTPAINT_DEFAULT_PROMPT = "outpaint the image in red marked area"
 IMAGE_DESC_PROMPT_NODE = "4"
 IMAGE_DESC_LOAD_NODE = "5"
 IMAGE_DESC_OUTPUT_NODE = "12"
@@ -461,24 +479,39 @@ def _refresh_workflow_from_server(wf_path, timeout=60):
     )
     if not base:
         return wf_path
-    url = "%s/%s" % (base, rel)
+    # New layout is Workflows/<name>. Keep the old root URL so a hub that has
+    # not restarted, or an older cache path, still refreshes.
+    rels = ["Workflows/%s" % rel, rel]
+    data = None
+    url = ""
+    last_err = None
     try:
         try:
             from urllib.request import Request, urlopen
         except ImportError:
             from urllib2 import Request, urlopen  # type: ignore
 
-        req = Request(url, headers={"User-Agent": "ComfyNuke-Workflow-Refresh/1.0", "Cache-Control": "no-cache", "Pragma": "no-cache"})
-        resp = urlopen(req, timeout=timeout)
-        try:
-            data = resp.read()
-        finally:
+        for rel_url in rels:
+            url = "%s/%s" % (base, rel_url)
             try:
-                resp.close()
-            except Exception:
-                pass
-        if not data or len(data) < 20:
-            raise RuntimeError("empty or tiny response (%s bytes)" % (len(data) if data else 0))
+                req = Request(url, headers={"User-Agent": "ComfyNuke-Workflow-Refresh/1.1", "Cache-Control": "no-cache", "Pragma": "no-cache"})
+                resp = urlopen(req, timeout=timeout)
+                try:
+                    data = resp.read()
+                finally:
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                if data and len(data) >= 20:
+                    break
+                last_err = RuntimeError("empty or tiny response")
+                data = None
+            except Exception as e:
+                last_err = e
+                data = None
+        if not data:
+            raise RuntimeError(last_err or "download failed")
         # Validate JSON before overwriting a good local file
         try:
             parsed = json.loads(data.decode("utf-8"))
@@ -2982,7 +3015,7 @@ def run_edit_on_node(
             "Edit_Image_v07.json",
         ):
             if wf_path.endswith(old):
-                newer = os.path.join(REPO_ROOT, "Edit_Image_v08.json")
+                newer = _workflow_file("Edit_Image_v08.json")
                 if os.path.isfile(newer):
                     wf_path = newer
                 break
@@ -2992,7 +3025,7 @@ def run_edit_on_node(
         elif is_hires:
             wf_path = _latest_hires_workflow_path()
         elif not str(wf_path).endswith("Edit_Image_v08.json"):
-            wf_path = os.path.join(REPO_ROOT, "Edit_Image_v08.json")
+            wf_path = _workflow_file("Edit_Image_v08.json")
 
     # Always take the hub's latest graph before this job (not the Nuke cache).
     wf_path = _refresh_workflow_from_server(wf_path)
@@ -4904,6 +4937,222 @@ def schedule_image_description(
     _schedule_ms(2000, _poll_comfy_tick)
 
 
+def schedule_image_outpaint(
+    node=None,
+    prompt=None,
+    server=DEFAULT_SERVER,
+    workflow=IMAGE_OUTPAINT_WORKFLOW,
+    seed=None,
+    output_dir=DEFAULT_OUT,
+    frame=None,
+):
+    """
+    Image Outpaint (Image_outpaint_v01.json) on 192.168.91.12:8166.
+    Visible frame (red paint included) → LoadImage 13.
+    Prompt → PrimitiveStringMultiline 73. Result ← SaveImageAdvanced 110.
+    """
+    global _BG_JOB_ACTIVE, _POLL_STATE
+
+    if nuke is None:
+        raise RuntimeError("Must run inside Nuke")
+
+    ComfyClient, ComfyError = _get_client()
+
+    if node is None:
+        nodes = nuke.selectedNodes()
+        if not nodes:
+            nuke.message(
+                "Select a node first (Read, Merge, RotoPaint, or Crop).\n"
+                "The frame you see, including the red marked area, is sent."
+            )
+            return
+        node = nodes[0]
+    if isinstance(node, str):
+        n = nuke.toNode(node)
+        if n is None:
+            nuke.message("Node gone: %s" % node)
+            return
+        node = n
+
+    prompt_s = str(prompt or IMAGE_OUTPAINT_DEFAULT_PROMPT).strip()
+    if not prompt_s:
+        nuke.message("Prompt is empty")
+        return
+
+    if _BG_JOB_ACTIVE or ComfyClient.is_busy() or _POLL_STATE is not None:
+        nuke.message(
+            "A Comfy job is already running in this Nuke session. Wait for it."
+        )
+        return
+
+    wf_path = workflow or IMAGE_OUTPAINT_WORKFLOW
+    server = resolve_server_for_workflow(wf_path, fallback=server or DEFAULT_SERVER)
+    try:
+        wf_path = _refresh_workflow_from_server(wf_path)
+    except Exception as e:
+        if not os.path.isfile(wf_path):
+            nuke.message("Workflow not found / cannot refresh:\n%s\n%s" % (wf_path, e))
+            return
+        _log("Outpaint — workflow refresh failed, trying local: %s" % e)
+    if not os.path.isfile(wf_path):
+        nuke.message("Workflow not found:\n%s" % wf_path)
+        return
+
+    if frame is None:
+        frame = int(nuke.frame())
+    out_dir = output_dir or DEFAULT_OUT
+    os.makedirs(out_dir, exist_ok=True)
+
+    _BG_JOB_ACTIVE = True
+    try:
+        import time as _time
+        import socket as _socket
+
+        _log(
+            "Outpaint — export visible frame %s from %s"
+            % (frame, node.name())
+        )
+        in_path, method = export_frame_for_describe(node, frame)
+        host = _socket.gethostname().replace(" ", "_")
+        stamp = "outpaint_%s_%s" % (
+            _time.strftime("%Y%m%d_%H%M%S"),
+            uuid.uuid4().hex[:8],
+        )
+        client = ComfyClient(
+            server=server,
+            workflow_path=wf_path,
+            timeout_sec=900.0,
+            poll_interval_sec=2.0,
+            client_id="nuke-outpaint-%s-%s" % (host, stamp),
+        )
+        _log("Outpaint — load workflow %s" % wf_path)
+        client.load_workflow()
+        client.id_load = IMAGE_OUTPAINT_LOAD
+        client.id_load_mask = None
+        client.id_load_ref = None
+        client.id_prompt = IMAGE_OUTPAINT_PROMPT
+        client.id_prompt_key = "value"
+        client.id_save = IMAGE_OUTPAINT_SAVE
+
+        remote = client.upload_image(in_path, remote_name="%s.png" % stamp)
+        _log("Uploaded plate %s (%s) → LoadImage %s" % (remote, method, IMAGE_OUTPAINT_LOAD))
+        prefix = "nuke/%s/%s" % (host, stamp)
+        wf = client.build_prompt(
+            image_name=remote,
+            prompt=prompt_s,
+            seed=seed,
+            filename_prefix=prefix,
+        )
+        if IMAGE_OUTPAINT_LOAD in wf:
+            wf[IMAGE_OUTPAINT_LOAD].setdefault("inputs", {})["image"] = remote
+        if IMAGE_OUTPAINT_PROMPT in wf:
+            wf[IMAGE_OUTPAINT_PROMPT].setdefault("inputs", {})["value"] = prompt_s
+        if IMAGE_OUTPAINT_SAVE in wf:
+            wf[IMAGE_OUTPAINT_SAVE].setdefault("inputs", {})["filename_prefix"] = prefix
+            client.id_save = IMAGE_OUTPAINT_SAVE
+        _log("Prompt → node %s: %s" % (IMAGE_OUTPAINT_PROMPT, prompt_s[:160]))
+        _log("SaveImageAdvanced node %s" % IMAGE_OUTPAINT_SAVE)
+        _log("Server %s" % server)
+        prompt_id = client.queue_prompt(wf)
+        _log("prompt_id=%s" % prompt_id)
+    except Exception as e:
+        _BG_JOB_ACTIVE = False
+        _log("ERROR: %s" % e)
+        try:
+            nuke.message("ComfyUI Image Outpaint error:\n%s" % e)
+        except Exception:
+            pass
+        return
+
+    import time as _time
+
+    _POLL_STATE = {
+        "client": client,
+        "prompt_id": prompt_id,
+        "t0": _time.time(),
+        "timeout": 900.0,
+        "out_dir": out_dir,
+        "node_name": node.name(),
+        "frame": frame,
+        "seed": seed,
+        "stamp": stamp,
+        "method": "outpaint",
+    }
+    _log("Outpaint queued — keep working. A new Read appears when it finishes.")
+    _schedule_ms(2000, _poll_comfy_tick)
+
+
+def show_image_outpaint_panel():
+    """Select a node whose viewer shows the red outpaint mark."""
+    if nuke is None:
+        raise RuntimeError("Must run inside Nuke")
+
+    import nukescripts  # type: ignore
+
+    sel = nuke.selectedNodes()
+    node = sel[0] if sel else None
+    if node is None:
+        nuke.message(
+            "Select a node first (Read, Merge, RotoPaint, or Crop).\n"
+            "Paint the outpaint area red, then run Image Outpaint."
+        )
+        return
+    frame = int(nuke.frame())
+
+    class ImageOutpaintPanel(nukescripts.PythonPanel):
+        def __init__(self):
+            nukescripts.PythonPanel.__init__(self, "ComfyUI Image Outpaint")
+            self.server = nuke.String_Knob("server", "Server")
+            self.workflow = nuke.File_Knob("workflow", "Workflow")
+            self.workflow.setValue(IMAGE_OUTPAINT_WORKFLOW)
+            self.server.setValue(
+                resolve_server_for_workflow(
+                    IMAGE_OUTPAINT_WORKFLOW, fallback=DEFAULT_SERVER
+                )
+            )
+            self.prompt = nuke.Multiline_Eval_String_Knob("prompt", "Prompt")
+            self.prompt.setValue(IMAGE_OUTPAINT_DEFAULT_PROMPT)
+            self.seed = nuke.Int_Knob("seed", "Seed")
+            self.seed.setValue(42)
+            self.use_random_seed = nuke.Boolean_Knob("use_random", "Random seed")
+            self.use_random_seed.setValue(True)
+            self.use_random_seed.setFlag(nuke.STARTLINE)
+            self.out_dir = nuke.String_Knob("output_dir", "Output dir")
+            self.out_dir.setValue(DEFAULT_OUT)
+            self.help_txt = nuke.Text_Knob(
+                "help_txt",
+                "",
+                "Paint the expand area <b>red</b> on the selected node.<br>"
+                "That frame → LoadImage <b>13</b>. Prompt → node <b>73</b>.<br>"
+                "Runs on <b>192.168.91.12:8166</b>. SaveImage <b>110</b> comes back as a Read.",
+            )
+            for k in (
+                self.server,
+                self.workflow,
+                self.prompt,
+                self.seed,
+                self.use_random_seed,
+                self.out_dir,
+                self.help_txt,
+            ):
+                self.addKnob(k)
+
+    p = ImageOutpaintPanel()
+    if not p.showModalDialog():
+        _log("Image Outpaint cancelled")
+        return
+    seed = None if p.use_random_seed.value() else int(p.seed.value())
+    schedule_image_outpaint(
+        node=node,
+        prompt=p.prompt.value(),
+        server=p.server.value().strip(),
+        workflow=p.workflow.value(),
+        seed=seed,
+        output_dir=p.out_dir.value() or DEFAULT_OUT,
+        frame=frame,
+    )
+
+
 def show_image_description_panel():
     if nuke is None:
         raise RuntimeError("Must run inside Nuke")
@@ -4980,13 +5229,14 @@ def register_menu():
     m.addCommand("Edit Image Hi-res...", show_hires_panel)
     m.addCommand("Edit Image Ref Hi-res...", show_ref_hires_panel)
     m.addCommand("Image Gen...", show_image_gen_panel)
+    m.addCommand("Image Outpaint...", show_image_outpaint_panel)
     m.addCommand("Image Description...", show_image_description_panel)
     m.addCommand("Image to Video...", show_image_to_video_panel)
     m.addCommand("Ping Server", ping_server)
     m.addCommand("Prompt Examples...", show_prompt_examples_panel)
 
     nuke.tprint(
-        "[Pix-Edit] Menu OK — Edit / Hi-res / Ref Hi-res / Gen / Describe / I2V / Ping | "
+        "[Pix-Edit] Menu OK — Edit / Hi-res / Ref Hi-res / Gen / Outpaint / Describe / I2V / Ping | "
         "server=%s root=%s workflow=%s"
         % (DEFAULT_SERVER, REPO_ROOT, os.path.basename(DEFAULT_WORKFLOW))
     )

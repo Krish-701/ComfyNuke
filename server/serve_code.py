@@ -71,6 +71,7 @@ ALLOWED_PREFIXES = (
     "nuke/",
     "client/",
     "docs/",
+    "Workflows/",
     "Edit_Image_v08.json",
     "Edit_Image_Hi_res.json",
     "Edit_Image_Hi_res_v04.json",
@@ -99,6 +100,7 @@ ALLOWED_PREFIXES = (
 _WORKFLOW_NAME_PREFIXES = (
     "Edit_Image",
     "Image_generation",
+    "Image_outpaint",
     "Image_Description",
     "video_",
 )
@@ -126,17 +128,14 @@ SYNC_FILES = (
     "nuke/ComfyEdit.py",
     "nuke/launch.py",
     "client/comfy_client.py",
-    "Edit_Image_v08.json",
-    "Edit_Image_Hi_res.json",
-    "Edit_Image_Hi_res_v04.json",
-    "Edit_Image_Hi_res_v03.json",
-    "Edit_Image_Hi_res_v02.json",
-    "Edit_Image_Hi_res_v01.json",
-    "Edit_Image_Ref_Hi_res_v02.json",
-    "Edit_Image_Ref_Hi_res_v01.json",
-    "Image_generation_v01.json",
-    "Image_Description_v01.json",
-    "video_minimax_h3_i2v.json",
+    "Workflows/Edit_Image_v08.json",
+    "Workflows/Edit_Image_Hi_res.json",
+    "Workflows/Edit_Image_Hi_res_v04.json",
+    "Workflows/Edit_Image_Ref_Hi_res_v02.json",
+    "Workflows/Image_generation_v01.json",
+    "Workflows/Image_outpaint_v01.json",
+    "Workflows/Image_Description_v01.json",
+    "Workflows/video_minimax_h3_i2v.json",
     "studio_config.json",
     "studio_config.example.json",
     "workflow_routes.json",
@@ -389,6 +388,17 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
 
         if not _rel_is_allowed(rel_posix):
             return str(root / ".forbidden")
+
+        # Artists on an older menu still request /Edit_Image_v08.json.
+        # Serve the same file from Workflows/ when the root copy is gone.
+        if not candidate.is_file() and "/" not in rel and rel.lower().endswith(".json"):
+            alt = (root / "Workflows" / candidate.name).resolve()
+            try:
+                alt.relative_to(root)
+            except ValueError:
+                alt = None
+            if alt is not None and alt.is_file():
+                return str(alt)
 
         return str(candidate)
 

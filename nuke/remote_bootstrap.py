@@ -53,17 +53,14 @@ _SYNC_FILES = (
     "nuke/ComfyEdit.py",
     "nuke/launch.py",
     "client/comfy_client.py",
-    "Edit_Image_v08.json",
-    "Edit_Image_Hi_res_v04.json",
-    "Edit_Image_Hi_res_v03.json",
-    "Edit_Image_Hi_res_v02.json",
-    "Edit_Image_Hi_res_v01.json",
-    "Edit_Image_Hi_res.json",
-    "Edit_Image_Ref_Hi_res_v02.json",
-    "Edit_Image_Ref_Hi_res_v01.json",
-    "Image_generation_v01.json",
-    "Image_Description_v01.json",
-    "video_minimax_h3_i2v.json",
+    "Workflows/Edit_Image_v08.json",
+    "Workflows/Edit_Image_Hi_res_v04.json",
+    "Workflows/Edit_Image_Hi_res.json",
+    "Workflows/Edit_Image_Ref_Hi_res_v02.json",
+    "Workflows/Image_generation_v01.json",
+    "Workflows/Image_outpaint_v01.json",
+    "Workflows/Image_Description_v01.json",
+    "Workflows/video_minimax_h3_i2v.json",
     "studio_config.json",  # optional
     "studio_config.example.json",
     "workflow_routes.json",
@@ -74,8 +71,6 @@ _OPTIONAL = frozenset(
     [
         "studio_config.json",
         "workflow_routes.json",
-        "Edit_Image_Hi_res_v01.json",
-        "Edit_Image_Hi_res_v02.json",
     ]
 )
 # Always re-download these from the hub on every Nuke launch (never keep stale
@@ -84,17 +79,14 @@ _ALWAYS_REFRESH = frozenset(
     [
         "nuke/ComfyEdit.py",
         "client/comfy_client.py",
-        "Edit_Image_v08.json",
-        "Edit_Image_Hi_res_v04.json",
-        "Edit_Image_Hi_res_v03.json",
-        "Edit_Image_Hi_res_v02.json",
-        "Edit_Image_Hi_res_v01.json",
-        "Edit_Image_Hi_res.json",
-        "Edit_Image_Ref_Hi_res_v02.json",
-        "Edit_Image_Ref_Hi_res_v01.json",
-        "Image_generation_v01.json",
-        "Image_Description_v01.json",
-        "video_minimax_h3_i2v.json",
+        "Workflows/Edit_Image_v08.json",
+        "Workflows/Edit_Image_Hi_res_v04.json",
+        "Workflows/Edit_Image_Hi_res.json",
+        "Workflows/Edit_Image_Ref_Hi_res_v02.json",
+        "Workflows/Image_generation_v01.json",
+        "Workflows/Image_outpaint_v01.json",
+        "Workflows/Image_Description_v01.json",
+        "Workflows/video_minimax_h3_i2v.json",
         "workflow_routes.json",
         "studio_config.json",
     ]
@@ -262,6 +254,7 @@ def _sync_from_server(base_url, cache, server_manifest, force_all=False):
         always = rel in _ALWAYS_REFRESH or rel.lower().endswith(".json") and (
             "Edit_Image" in rel
             or "Image_generation" in rel
+            or "Image_outpaint" in rel
             or "image_description" in rel.lower()
             or "video_" in rel
             or rel.endswith("_i2v.json")
@@ -436,6 +429,7 @@ def bootstrap():
     _log("    ref:   %s" % getattr(ComfyEdit, "EDIT_REF_HIRES_WORKFLOW", ""))
 
     _log("    gen:   %s" % getattr(ComfyEdit, "IMAGE_GEN_WORKFLOW", ""))
+    _log("    out:   %s" % getattr(ComfyEdit, "IMAGE_OUTPAINT_WORKFLOW", ""))
     _log("    desc:  %s" % getattr(ComfyEdit, "IMAGE_DESC_WORKFLOW", ""))
     _log("    i2v:   %s" % getattr(ComfyEdit, "I2V_WORKFLOW", ""))
     _log("  Menu: Nuke > Pix-Edit")

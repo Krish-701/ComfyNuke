@@ -69,6 +69,8 @@ def _nuke_tool_from_filename(name: str) -> str:
         return "Image Description"
     if "generation" in b or b.startswith("image_gen"):
         return "Image Gen"
+    if "outpaint" in b:
+        return "Image Outpaint"
     if "upscale" in b:
         return "Image Upscale"
     if "video" in b or "i2v" in b or "minimax" in b:
@@ -285,6 +287,7 @@ class ComfyClient:
     def _default_workflow_path() -> str:
         here = Path(__file__).resolve().parent
         repo = here.parent
+        folders = (repo / "Workflows", repo)
         for name in (
             "Edit_Image_v08.json",
             "Edit_Image_Hi_res_v04.json",
@@ -304,10 +307,11 @@ class ComfyClient:
             "Edit_Image_API.json",
             "Edit_Image.json",
         ):
-            candidate = repo / name
-            if candidate.is_file():
-                return str(candidate)
-        return str(repo / "Edit_Image_v08.json")
+            for folder in folders:
+                candidate = folder / name
+                if candidate.is_file():
+                    return str(candidate)
+        return str(repo / "Workflows" / "Edit_Image_v08.json")
 
     def _url(self, path: str, query: Optional[Dict[str, str]] = None) -> str:
         base = f"{self.server}{path}"

@@ -40,12 +40,30 @@ _WF_SKIP = {
 }
 
 
+def _workflow_json_paths(root: Path) -> List[Path]:
+    """Working graphs live in Workflows/. Root copies are older leftovers."""
+    found: List[Path] = []
+    wf_dir = root / "Workflows"
+    if wf_dir.is_dir():
+        found.extend(p for p in wf_dir.glob("*.json") if p.is_file())
+    found.extend(p for p in root.glob("*.json") if p.is_file())
+    return found
+
+
+def _resolve_workflow_path(root: Path, name: str) -> Path:
+    base = Path(str(name or "")).name
+    for p in (root / "Workflows" / base, root / base):
+        if p.is_file():
+            return p
+    return root / "Workflows" / base
+
+
 def list_workflow_catalog(repo_root: Optional[Path] = None) -> List[str]:
     """Every workflow JSON we know: disk + workflow_routes.json. New files appear automatically."""
     names = set()
     root = Path(repo_root) if repo_root else None
     if root and root.is_dir():
-        for p in root.glob("*.json"):
+        for p in _workflow_json_paths(root):
             n = p.name
             if n in _WF_SKIP:
                 continue
@@ -84,7 +102,7 @@ def _catalog_graphs(repo_root: Optional[Path]) -> List[Tuple[str, set]]:
     key = str(root)
     try:
         mtime = max(
-            (p.stat().st_mtime for p in root.glob("*.json") if p.is_file()),
+            (p.stat().st_mtime for p in _workflow_json_paths(root)),
             default=0.0,
         )
     except Exception:
@@ -94,7 +112,7 @@ def _catalog_graphs(repo_root: Optional[Path]) -> List[Tuple[str, set]]:
         return cached[1]
     graphs: List[Tuple[str, set]] = []
     for name in list_workflow_catalog(root):
-        p = root / name
+        p = _resolve_workflow_path(root, name)
         if not p.is_file():
             continue
         try:
@@ -190,6 +208,7 @@ CORE_NUKE_TOOLS = (
     "Edit Image Hi-res",
     "Edit Image Ref Hi-res",
     "Image Gen",
+    "Image Outpaint",
     "Image Description",
     "Image to Video",
 )
@@ -218,6 +237,8 @@ def nuke_tool_from_filename(name: str) -> str:
         return "Image Description"
     if "generation" in b or b.startswith("image_gen"):
         return "Image Gen"
+    if "outpaint" in b:
+        return "Image Outpaint"
     if "upscale" in b:
         return "Image Upscale"
     if "video" in b or "i2v" in b or "minimax" in b:
@@ -250,6 +271,8 @@ def infer_nuke_tool(
         return "Image Description"
     if "nuke-t2i" in blob or "t2i" in blob:
         return "Image Gen"
+    if "nuke-outpaint" in blob or "outpaint" in blob:
+        return "Image Outpaint"
     if "nuke-i2v" in blob or "i2v" in blob:
         return "Image to Video"
     return ""

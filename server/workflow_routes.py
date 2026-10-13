@@ -28,6 +28,7 @@ KNOWN_WORKFLOWS = (
     "Edit_Image_Ref_Hi_res_v01.json",
 
     "Image_generation_v01.json",
+    "Image_outpaint_v01.json",
     "Image_Description_v01.json",
     "video_minimax_h3_i2v.json",
 )
@@ -199,19 +200,30 @@ def _normalize_url(url: str) -> str:
 
 
 def discover_workflow_files(root: Path) -> List[str]:
+    root = Path(root)
+    folders = [root / "Workflows", root]
     names = []
     for name in KNOWN_WORKFLOWS:
-        if (Path(root) / name).is_file():
-            names.append(name)
+        for folder in folders:
+            if (folder / name).is_file():
+                names.append(name)
+                break
     try:
-        for p in sorted(Path(root).glob("*.json")):
+        seen = set(names)
+        paths = []
+        for folder in folders:
+            if folder.is_dir():
+                paths.extend(sorted(folder.glob("*.json")))
+        for p in paths:
             if p.name in ("studio_config.json", "studio_config.example.json", "workflow_routes.json"):
                 continue
-            if p.name not in names:
-                # skip tiny non-workflow json
-                if p.stat().st_size < 80:
-                    continue
-                names.append(p.name)
+            if p.name in seen:
+                continue
+            # skip tiny non-workflow json
+            if p.stat().st_size < 80:
+                continue
+            names.append(p.name)
+            seen.add(p.name)
     except Exception:
         pass
     return names

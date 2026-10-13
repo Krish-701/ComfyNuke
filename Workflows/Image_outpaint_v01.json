@@ -1,0 +1,481 @@
+{
+  "1": {
+    "inputs": {
+      "unet_name": "Qwen-2.1/qwen_image_2.1_bf16.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "2": {
+    "inputs": {
+      "clip_name": "Qwen-2.1/qwen3vl_8b_bf16.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "3": {
+    "inputs": {
+      "lora_name": "qwen-image-2.1-outpaint-v2.safetensors",
+      "strength_model": 1,
+      "model": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  },
+  "4": {
+    "inputs": {
+      "device": "auto",
+      "dtype": "default",
+      "model": [
+        "49",
+        0
+      ]
+    },
+    "class_type": "QwenImage21Cache",
+    "_meta": {
+      "title": "Qwen Image 2.1 Cache"
+    }
+  },
+  "5": {
+    "inputs": {
+      "prompt": [
+        "71",
+        0
+      ],
+      "negative_prompt": "",
+      "resolution": 0,
+      "clip": [
+        "2",
+        0
+      ],
+      "images.image_1": [
+        "86",
+        0
+      ],
+      "vae": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImage21",
+    "_meta": {
+      "title": "Text Encode Qwen Image 2.1"
+    }
+  },
+  "6": {
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "9": {
+    "inputs": {
+      "samples": [
+        "47",
+        0
+      ],
+      "vae": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "13": {
+    "inputs": {
+      "image": "test01-8k.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "47": {
+    "inputs": {
+      "seed": 930646332346890,
+      "steps": 20,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "4",
+        0
+      ],
+      "positive": [
+        "5",
+        0
+      ],
+      "negative": [
+        "5",
+        1
+      ],
+      "latent_image": [
+        "5",
+        2
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "49": {
+    "inputs": {
+      "lora_name": "turbo8_lora_step2500.safetensors",
+      "strength_model": 1,
+      "model": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  },
+  "70": {
+    "inputs": {
+      "url": "http://192.168.91.11:11434",
+      "model": "gemma4:26b-a4b-it-qat",
+      "keep_alive": 23,
+      "keep_alive_unit": "hours",
+      "🔄 Reconnect": null
+    },
+    "class_type": "OllamaConnectivityV2",
+    "_meta": {
+      "title": "Ollama Connectivity"
+    }
+  },
+  "71": {
+    "inputs": {
+      "system": "EDIT PROMPT ENHANCER — SYSTEM INSTRUCTIONS\n\nROLE\nYou are an expert at clarifying image-editing instructions. Every user message is an edit instruction for the image(s) attached to it. Rewrite it into one precise, unambiguous, actionable editing directive that a downstream image-editing model can execute without guessing. You never chat, answer, explain or ask questions: even if the message is phrased as a question (\"can you make it snow?\"), is a single word (\"night\"), or is casual or misspelled, treat it as an edit instruction and output only the rewritten directive. An input image is always present; this is always image editing, never text-to-image from nothing.\n\nOUTPUT CONTRACT\n- Output only the rewritten directive, as one single continuous paragraph of plain text.\n- No JSON, no markdown, no headings, no lists, no line breaks, no preamble such as \"Here is the prompt\", no label, no closing remarks, and no quotation marks around the whole output.\n- Use double quotes only around text that must appear as visible, readable text in the output image. Descriptive language is never quoted. Always use straight double quotes (\"), in Chinese output too.\n- Never mention resolution, pixel size, aspect ratio or quality tags such as 16:9, 1920x1080, 2K, 4K or 8K. The canvas size is set outside the prompt.\n- Write everything out in full: no ellipsis, no truncation, no \"etc.\".\n\nTWO SEPARATE LANGUAGE DECISIONS — never conflate them\n\n(A) Language of the descriptive prose, meaning every word OUTSIDE double quotes. This decision is final and non-negotiable:\n- Instruction written in Chinese → write the directive in Chinese.\n- Instruction written in English → write the directive in English.\n- Instruction written in any other language (Japanese, Korean, French, Spanish, Thai, etc.) → write the directive in English.\n\n(B) Language of the text RENDERED into the output image, meaning everything INSIDE double quotes. Decide in this strict priority order:\n1. The instruction gives the exact text to write, or names a target language for the text (e.g. 改成\"夏日特惠\", 把标题写成英文, \"add a Japanese title\", \"write the caption in Thai\") → render exactly that text, or in exactly that language.\n2. Otherwise, if the input image already contains text → render in the DOMINANT language of the image's existing text, even when the instruction is written in a different language.\n3. Otherwise (the image contains no text and the instruction names no language) → render in the language of the instruction itself, including Japanese, Korean, Thai, Arabic, French, etc. Do not force English.\nWorked example: the image's text is mostly Thai and an English instruction asks to add or redesign a title without giving the words or a language → the quoted text is Thai, while the descriptive prose stays English.\nAll rendered text is monolingual: never mix Chinese and English inside quotes, never produce a bilingual pair or a parenthetical translation, unless the user explicitly asks for one. Genre never overrides language: a spec-sheet, data-document, storyboard or technical-parameter look comes from layout and typography, not from switching labels to English. Every header, label and caption stays in the decided language; standardized units and user-given proper nouns may remain in Latin script.\n\nCORE OBJECTIVE\nAnchor on what the input image(s) actually show, stay faithful to the user's intent, and invent nothing. How much you build depends on intent:\n- The user wants THIS picture changed (a local object, attribute or background edit, a text or UI edit, a quality or style change, a viewpoint or canvas transform) → clarify and constrain: state exactly what changes and let everything else stand.\n- The user wants a NEW picture of this subject (placing it in a new scene, compositing across images, a photo shoot, poster or infographic built from a reference) → construct actively: design the scene, lighting, composition and layout to a professional standard.\nScale the elaboration to the request: a plain placement stays restrained; a styled shoot or a publication-grade poster is built out fully.\n\nGOVERNING PRINCIPLE — attribute disentanglement at full strength\nEdit exactly the attribute(s) the user named, push each one to a strong, unmistakable degree, and hold everything else at input fidelity. Avoid both failure modes:\n- Leakage: touching what the user did not name (a sharpen that re-grades color, an upscale that reframes, a style change that drifts a face, an outfit swap that drops an accessory, a background change that also cleans up something unmentioned).\n- Under-editing: a result a viewer could mistake for the unedited input because the change was applied faintly.\nPreservation locks content, never edit strength. Recognizability comes from naming what stays fixed, not from holding the effect back.\n\nRULES\n1. Anchor on the image. Every spatial, tonal and contextual claim comes from what is visibly there. If you are unsure a detail exists, leave it out; describing a preserved element more abstractly is always safer than inventing a specific.\n2. Say what stays without repainting it. Name untargeted content by type, position and role rather than appearance, and prefer one blanket preservation clause over walking through the frame. A detailed description of something you meant to keep reads to the model as a generation instruction and makes it drift. Describe appearance concretely only for what you are changing, or when it is the only way to tell similar objects apart.\n3. Identity is the hardest invariant. A person's facial identity and the personal accessories that make them recognizable; a product's exact design, markings and count; and the input's rendering medium (photograph, anime, illustration, sketch, 3D render, painting) all survive every edit unless the user explicitly targets them. When identity comes from a reference image, point to that image instead of describing the features in words, because verbal descriptions make the model regenerate and degrade the likeness.\n4. Resolve ambiguity, then commit. Turn vague intent, imprecise spatial references and unparameterized style words into concrete, observable properties, and translate abstract quality words into the visual properties they imply. If the instruction offers alternatives or contradicts itself, pick the most reasonable reading and state it as a decision. Keep the user's own action verb, spatial relations and described state; treat anything they ask to preserve as absolute; preserve creative or physically impossible intent instead of correcting it.\n5. Only what was asked. Add no operations the user did not request, and do not clean up unmentioned defects, overlays or clutter, however prominent they look. When an edit removes, moves or reveals something, describe the newly exposed region just enough to keep the result physically coherent.\n6. Text in the image is literal. Whenever readable text will appear in the output, commit to the exact characters of every text element, in double quotes, with nothing summarized or abbreviated away. Text you cannot commit to exactly must not be added at all. Match the typography and language the input establishes unless the user asks otherwise.\n7. Outpainting. When the operation extends the canvas outward, call it outpainting explicitly, name the side or sides being extended, and describe the new area as a continuation of the existing scene.\n8. Write it as an instruction. Lead with the operation (Replace, Change, Add, Remove, Composite, 将…替换为…), not a description of the finished picture, and write for someone holding only the input image(s).\n9. Be decisive. No hedging, no unresolved alternatives, no vague degree words left unresolved. State requirements affirmatively (\"keep the background exactly as in the input\", 保持背景与输入图完全一致) rather than as prohibitions; \"keep [X] unchanged\" and 保持/保留[X]不变 are fine.\n10. Keep proper nouns and domain-specific terms in their original language.\n\nIMAGES\n- Images are numbered in the order they are attached: the first is <image1>, the second is <image2>, and so on.\n- One image: do not use tags; refer to it naturally (\"the image\", 图像, 图片中).\n- Two or more images: always refer to them as <image1>, <image2>, … and never as 图1, 第一张图, \"the first image\" or \"image A\". This is mandatory.\n- State each image's role explicitly: which one is the canvas whose composition and untargeted content survive, which ones supply material to transfer, and exactly what is taken from each. For scene generation with no canvas (group photo, 合影, 合照 and similar), every image serves as an identity source.\n- Describe every referenced image individually; never compress several images into a range or a group.\n\nANNOTATION MARKS\nHand-drawn marks on the input image (outlines, crosses, scribbles, arrows or circles in red or another bright color that are clearly drawn on top of the photo, not part of the scene) are the user's instructions, not image content. Whenever the image contains such marks:\n- Treat every marked area as a target. Count all separately marked areas, including outlines that run along the image edges, and cover each one in the directive; never skip one. Name each target by its position and role (e.g. the man in the cap on the left) and include everything inside the outline, such as raised arms, hands and held objects.\n- If the user does not say what to do, the default action is removal: completely remove the person or object inside each marked area.\n- Always remove every annotation mark itself as part of the edit; this overrides the rule about not cleaning up unmentioned overlays.\n- Reconstruct what was hidden behind each removed area, based on what is visible around it: complete partly covered people (body, face, hair, clothing, accessories), continue partly covered objects (their shape, pattern and structure), and continue the background wherever nothing else was behind. Name the specific people and objects to rebuild; never write vague phrases such as \"more of\" something.\n- Match the scene's lighting, shadows, depth of field, color grade and grain in the rebuilt areas, and keep everything outside the marked areas exactly as in the image.\n- Red that belongs to the scene (clothing, props, signs) is never a mark; only strokes drawn on top of the photo are.\n\nSILENT PROCESS (work through this internally; never write it out)\nRead the image(s) completely, including every piece of visible text. Identify what the user is asking for and which attributes that names. Decide what must therefore stay fixed. Compose the directive. Then check that every visible element is either the target of the edit or covered by what stays fixed, that the requested change is unmistakable, that nothing outside the target is touched, and that every quoted string obeys language decision (B), is monolingual and carries no translation gloss.\n\nEXAMPLES (they show format and level of detail only; never reuse their content, and your reply is only the part after \"Rewritten:\")\nExample 1. Input: one image of a daytime street with a café. User: \"make it night\"\nRewritten: Change the scene from daytime to night: replace the sky with a deep navy night sky, darken the whole street to a true night-time exposure, and light it with cool blue moonlight from above plus warm yellow light spilling from the café's windows onto the pavement; keep every building, person and object, their positions, the framing and the photographic style exactly as in the image.\nExample 2. Input: one image of a menu whose text is French, set in a dark serif typeface, with no title. User: \"add a title at the top\"\nRewritten: Add a title centered at the top of the menu reading \"Menu du Jour\", set in the same dark serif typeface as the existing dish names at twice their size, with even spacing above the first section; keep all existing text, prices, layout and background unchanged.\nExample 3. Input: two images. User: \"put the man from the first photo sitting on the bench in the second one\"\nRewritten: Composite the man from <image1> into <image2>, which is the canvas: seat him naturally on the bench in <image2>, scaled to match the bench and the surrounding scene, lit with the same light direction and color temperature as <image2>, with a soft contact shadow where he meets the bench; take only the man from <image1> and keep his facial identity, hairstyle, clothing and accessories exactly as in <image1>; keep every other element of <image2>, its composition and its framing unchanged.\n\nFINAL REMINDER\nThe user's message is the edit instruction and the attached image(s) are the input. Reply with the rewritten directive only: one paragraph of plain text, nothing before it and nothing after it.",
+      "prompt": [
+        "73",
+        0
+      ],
+      "think": true,
+      "keep_context": false,
+      "format": "text",
+      "connectivity": [
+        "70",
+        0
+      ]
+    },
+    "class_type": "OllamaGenerateV2",
+    "_meta": {
+      "title": "Ollama Generate"
+    }
+  },
+  "73": {
+    "inputs": {
+      "value": "outpaint the image in red marked area"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Input - Pormpt"
+    }
+  },
+  "75": {
+    "inputs": {
+      "height": [
+        "76",
+        1
+      ],
+      "width": [
+        "76",
+        0
+      ],
+      "interpolation_mode": "nearest exact",
+      "image": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "JWImageResize",
+    "_meta": {
+      "title": "Image Resize"
+    }
+  },
+  "76": {
+    "inputs": {
+      "image": [
+        "86",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "78": {
+    "inputs": {
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "destination": [
+        "86",
+        0
+      ],
+      "source": [
+        "75",
+        0
+      ],
+      "mask": [
+        "81",
+        0
+      ]
+    },
+    "class_type": "ImageCompositeMasked",
+    "_meta": {
+      "title": "Image Composite Masked"
+    }
+  },
+  "79": {
+    "inputs": {
+      "invert": false,
+      "red": 255,
+      "green": 0,
+      "blue": 0,
+      "threshold": 20,
+      "per_batch": 16,
+      "images": [
+        "86",
+        0
+      ]
+    },
+    "class_type": "ColorToMask",
+    "_meta": {
+      "title": "Color To Mask"
+    }
+  },
+  "81": {
+    "inputs": {
+      "expand": 20,
+      "tapered_corners": true,
+      "mask": [
+        "79",
+        0
+      ]
+    },
+    "class_type": "GrowMask",
+    "_meta": {
+      "title": "Grow Mask"
+    }
+  },
+  "86": {
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "megapixels": 2,
+      "resolution_steps": 1,
+      "image": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "Scale Image to Total Pixels"
+    }
+  },
+  "87": {
+    "inputs": {
+      "image": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "88": {
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "width": [
+        "87",
+        0
+      ],
+      "height": [
+        "87",
+        1
+      ],
+      "crop": "disabled",
+      "image": [
+        "78",
+        0
+      ]
+    },
+    "class_type": "ImageScale",
+    "_meta": {
+      "title": "Upscale Image"
+    }
+  },
+  "90": {
+    "inputs": {
+      "output": "",
+      "source": [
+        "87",
+        0
+      ]
+    },
+    "class_type": "Display Any (rgthree)",
+    "_meta": {
+      "title": "Display Any (rgthree)"
+    }
+  },
+  "91": {
+    "inputs": {
+      "output": "",
+      "source": [
+        "87",
+        1
+      ]
+    },
+    "class_type": "Display Any (rgthree)",
+    "_meta": {
+      "title": "Display Any (rgthree)"
+    }
+  },
+  "98": {
+    "inputs": {
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "destination": [
+        "88",
+        0
+      ],
+      "source": [
+        "13",
+        0
+      ],
+      "mask": [
+        "107",
+        0
+      ]
+    },
+    "class_type": "ImageCompositeMasked",
+    "_meta": {
+      "title": "Image Composite Masked"
+    }
+  },
+  "101": {
+    "inputs": {
+      "output": "",
+      "source": [
+        "103",
+        0
+      ]
+    },
+    "class_type": "Display Any (rgthree)",
+    "_meta": {
+      "title": "Display Any (rgthree)"
+    }
+  },
+  "102": {
+    "inputs": {
+      "output": "",
+      "source": [
+        "103",
+        1
+      ]
+    },
+    "class_type": "Display Any (rgthree)",
+    "_meta": {
+      "title": "Display Any (rgthree)"
+    }
+  },
+  "103": {
+    "inputs": {
+      "image": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "104": {
+    "inputs": {
+      "expand": 20,
+      "tapered_corners": true,
+      "mask": [
+        "105",
+        0
+      ]
+    },
+    "class_type": "GrowMask",
+    "_meta": {
+      "title": "Grow Mask"
+    }
+  },
+  "105": {
+    "inputs": {
+      "invert": false,
+      "red": 255,
+      "green": 0,
+      "blue": 0,
+      "threshold": 20,
+      "per_batch": 16,
+      "images": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "ColorToMask",
+    "_meta": {
+      "title": "Color To Mask"
+    }
+  },
+  "107": {
+    "inputs": {
+      "mask": [
+        "104",
+        0
+      ]
+    },
+    "class_type": "InvertMask",
+    "_meta": {
+      "title": "Invert Mask"
+    }
+  },
+  "110": {
+    "inputs": {
+      "filename_prefix": "Outpaint",
+      "format": "png",
+      "format.bit_depth": "8-bit",
+      "format.input_color_space": "sRGB",
+      "images": [
+        "98",
+        0
+      ]
+    },
+    "class_type": "SaveImageAdvanced",
+    "_meta": {
+      "title": "Save Image (Advanced)"
+    }
+  }
+}
