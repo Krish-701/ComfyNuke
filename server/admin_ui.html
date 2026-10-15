@@ -444,8 +444,12 @@
       <div id="tabProjects" class="hidden">
         <div class="card">
           <h2>Project codes</h2>
-          <p class="hint">Artists must type a code that matches this list. Caps and small letters both match. Archive hides a code without deleting its history.</p>
+          <p class="hint">Each code belongs to one group. Artists still type the code only. Caps and small letters both match. Archive hides a code and keeps its history.</p>
           <div class="row">
+            <div>
+              <label>Group</label>
+              <select id="projGroup"></select>
+            </div>
             <div>
               <label>Code</label>
               <input id="projCode" type="text" placeholder="OIG_SYMU" />
@@ -458,17 +462,49 @@
               <button id="btnProjAdd" type="button">Add</button>
             </div>
           </div>
-          <div id="projMsg"></div>
-          <div class="log-table-wrap">
-            <table>
-              <thead><tr><th>Code</th><th>Note</th><th></th></tr></thead>
-              <tbody id="projActive"></tbody>
-            </table>
+          <h2 style="margin-top:8px">Bulk import</h2>
+          <p class="hint">Paste codes separated by commas or new lines, pick the group, then import. A code that already exists is moved into that group.</p>
+          <div class="row">
+            <div>
+              <label>Import into group</label>
+              <select id="projImportGroup"></select>
+            </div>
+            <div style="flex:3">
+              <label>Codes</label>
+              <textarea id="projBulk" rows="3" placeholder="avf_vbl, BTJ_GTN, DNG_GPW" style="width:100%;margin:0"></textarea>
+            </div>
+            <div style="flex:0 0 auto;margin-bottom:12px">
+              <button id="btnProjImport" type="button">Import</button>
+            </div>
           </div>
+          <div id="projMsg"></div>
+          <div class="toolbar" style="margin-top:8px">
+            <div style="flex:2">
+              <label>Search</label>
+              <input id="projSearch" class="search" type="text" placeholder="Check a code or filter the list" style="margin:0" />
+            </div>
+            <div>
+              <label>Show group</label>
+              <select id="projFilterGroup" style="margin:0"><option value="">All groups</option></select>
+            </div>
+            <div>
+              <label>Order</label>
+              <select id="projSort" style="margin:0">
+                <option value="name">Name A–Z</option>
+                <option value="name-desc">Name Z–A</option>
+                <option value="group">Group, then name</option>
+              </select>
+            </div>
+            <button id="btnProjOpen" class="ghost" type="button">Expand all</button>
+            <button id="btnProjClose" class="ghost" type="button">Collapse all</button>
+            <button id="btnProjArchiveSel" class="danger" type="button">Archive selected</button>
+          </div>
+          <div id="projSearchHit" class="hint"></div>
+          <div id="projActive"></div>
           <h2 style="margin-top:18px">Archived</h2>
           <div class="log-table-wrap">
             <table>
-              <thead><tr><th>Code</th><th>Note</th><th></th></tr></thead>
+              <thead><tr><th>Code</th><th>Group</th><th>Note</th><th></th></tr></thead>
               <tbody id="projArchived"></tbody>
             </table>
           </div>
@@ -2142,34 +2178,158 @@
       window.location.href = "/admin/api/logs/export_projects.csv?" + logQuery();
     };
 
-    async function loadProjects() {
-      const data = await api("/admin/api/projects");
+    let PROJ = { codes: [], archived: [], groups: [] };
+    let projOpen = {};
+
+    function projGroupOptions(selected) {
+      const names = PROJ.groups || [];
+      const cur = selected || "";
+      return names.map((g) => `<option value="${esc(g)}" ${g === cur ? "selected" : ""}>${esc(g)}</option>`).join("");
+    }
+
+    function fillProjGroupSelects() {
+      const addSel = $("projGroup").value;
+      const impSel = $("projImportGroup").value;
+      const filSel = $("projFilterGroup").value;
+      const opts = projGroupOptions(addSel);
+      $("projGroup").innerHTML = `<option value="">No group</option>` + opts;
+      $("projImportGroup").innerHTML = `<option value="">Pick a group</option>` + projGroupOptions(impSel);
+      $("projFilterGroup").innerHTML = `<option value="">All groups</option>` + projGroupOptions(filSel);
+      if (addSel) $("projGroup").value = addSel;
+      if (impSel) $("projImportGroup").value = impSel;
+      if (filSel) $("projFilterGroup").value = filSel;
+    }
+
+    function projKey(code) {
+      return String(code || "").trim().toLowerCase();
+    }
+
+    function renderProjSearch() {
+      const q = ($("projSearch").value || "").trim();
+      const hit = $("projSearchHit");
+      if (!q) { hit.textContent = ""; return; }
+      const key = projKey(q);
+      const active = (PROJ.codes || []).find((c) => projKey(c.code) === key);
+      const archived = (PROJ.archived || []).find((c) => projKey(c.code) === key);
+      if (active) {
+        hit.textContent = active.code + " is active" + (active.group ? " in " + active.group : " (no group)");
+        return;
+      }
+      if (archived) {
+        hit.textContent = archived.code + " is archived" + (archived.group ? " (was in " + archived.group + ")" : "");
+        return;
+      }
+      const partial = (PROJ.codes || []).filter((c) => projKey(c.code).includes(key));
+      if (partial.length) {
+        hit.textContent = "No exact match. Similar: " + partial.slice(0, 8).map((c) => c.code).join(", ");
+        return;
+      }
+      hit.textContent = "Not in the list: " + q;
+    }
+
+    function renderProjects() {
       const write = can("machines.edit");
+      const q = projKey($("projSearch").value || "");
+      const groupFilter = $("projFilterGroup").value || "";
+      const sort = $("projSort").value || "name";
+      let rows = (PROJ.codes || []).filter((c) => {
+        if (groupFilter && (c.group || "") !== groupFilter) return false;
+        if (!q) return true;
+        const hay = projKey(c.code) + " " + projKey(c.group) + " " + projKey(c.note);
+        return hay.includes(q);
+      });
+      rows = rows.slice().sort((a, b) => {
+        const ca = projKey(a.code);
+        const cb = projKey(b.code);
+        if (sort === "name-desc") return cb.localeCompare(ca);
+        if (sort === "group") {
+          const ga = projKey(a.group || "zzzz");
+          const gb = projKey(b.group || "zzzz");
+          if (ga !== gb) return ga.localeCompare(gb);
+        }
+        return ca.localeCompare(cb);
+      });
+      const map = {};
+      rows.forEach((c) => {
+        const g = c.group || "No group";
+        if (!map[g]) map[g] = [];
+        map[g].push(c);
+      });
+      let groups = (PROJ.groups || []).slice();
+      Object.keys(map).forEach((g) => {
+        if (groups.indexOf(g) < 0 && g !== "No group") groups.push(g);
+      });
+      if (map["No group"]) groups.push("No group");
+      if (groupFilter) groups = groups.filter((g) => g === groupFilter);
+      if (q) groups = groups.filter((g) => (map[g] || []).length);
+      groups.sort((a, b) => {
+        if (a === "No group") return 1;
+        if (b === "No group") return -1;
+        return a.toLowerCase().localeCompare(b.toLowerCase());
+      });
       const active = $("projActive");
-      const archived = $("projArchived");
-      const row = (c, archivedRow) => `<tr>
+      if (!groups.length) {
+        active.innerHTML = `<p class="hint">No codes match.</p>`;
+      } else {
+        active.innerHTML = groups.map((g) => {
+          const members = map[g] || [];
+          const open = q ? members.length > 0 : !!projOpen[g];
+          const body = members.map((c) => `<tr>
+            <td><input type="checkbox" class="proj-pick" value="${esc(c.id)}" ${write ? "" : "disabled"} /></td>
+            <td class="mono">${esc(c.code)}</td>
+            <td>${esc(c.note || "")}</td>
+            <td class="actions">
+              ${write ? `<button type="button" class="secondary proj-edit" data-id="${esc(c.id)}" data-code="${esc(c.code)}" data-note="${esc(c.note || "")}" data-group="${esc(c.group || "")}">Edit</button>
+              <button type="button" class="danger proj-archive" data-id="${esc(c.id)}">Archive</button>` : ""}
+            </td>
+          </tr>`).join("");
+          const table = members.length
+            ? `<table>
+              <thead><tr>
+                <th style="width:36px"><input type="checkbox" class="proj-all" data-group="${esc(g)}" ${write ? "" : "disabled"} /></th>
+                <th>Code</th><th>Note</th><th></th>
+              </tr></thead>
+              <tbody>${body}</tbody>
+            </table>`
+            : `<p class="hint" style="padding:12px">No codes in this group.</p>`;
+          return `<div class="group ${open ? "open" : ""}" data-group="${esc(g)}">
+            <div class="group-head" data-toggle="${esc(g)}">
+              <span class="chevron">▶</span>
+              <span class="group-title">${esc(g)}</span>
+              <span class="group-meta">${members.length} code${members.length === 1 ? "" : "s"}</span>
+            </div>
+            <div class="group-body">${table}</div>
+          </div>`;
+        }).join("");
+      }
+      const archivedRows = (PROJ.archived || []).filter((c) => {
+        if (!q) return true;
+        return (projKey(c.code) + " " + projKey(c.group)).includes(q);
+      });
+      $("projArchived").innerHTML = archivedRows.map((c) => `<tr>
         <td class="mono">${esc(c.code)}</td>
+        <td>${esc(c.group || "—")}</td>
         <td>${esc(c.note || "")}</td>
-        <td class="actions">
-          ${write ? (archivedRow
-            ? `<button type="button" class="secondary proj-restore" data-id="${esc(c.id)}">Restore</button>`
-            : `<button type="button" class="secondary proj-edit" data-id="${esc(c.id)}" data-code="${esc(c.code)}" data-note="${esc(c.note || "")}">Edit</button>
-               <button type="button" class="danger proj-archive" data-id="${esc(c.id)}">Archive</button>`)
-            : ""}
-        </td>
-      </tr>`;
-      active.innerHTML = (data.codes || []).map((c) => row(c, false)).join("")
-        || `<tr><td colspan="3" class="hint">No active codes</td></tr>`;
-      archived.innerHTML = (data.archived || []).map((c) => row(c, true)).join("")
-        || `<tr><td colspan="3" class="hint">Nothing archived</td></tr>`;
-      const required = new Set(data.require_workflows || []);
-      $("projWorkflows").innerHTML = (data.workflows || []).map((name) => `
-        <label style="display:flex;align-items:center;gap:8px;margin:6px 0">
-          <input type="checkbox" class="proj-wf" value="${esc(name)}" ${required.has(name) ? "checked" : ""} ${write ? "" : "disabled"} />
-          <code>${esc(name)}</code>
-        </label>`).join("") || `<p class="hint">No workflow files found.</p>`;
+        <td>${write ? `<button type="button" class="secondary proj-restore" data-id="${esc(c.id)}">Restore</button>` : ""}</td>
+      </tr>`).join("") || `<tr><td colspan="4" class="hint">Nothing archived</td></tr>`;
+      active.querySelectorAll(".group-head").forEach((head) => {
+        head.addEventListener("click", () => {
+          const g = head.dataset.toggle;
+          const box = head.parentElement;
+          const open = box.classList.toggle("open");
+          projOpen[g] = open;
+        });
+      });
       $("btnProjAdd").style.display = write ? "" : "none";
+      $("btnProjImport").style.display = write ? "" : "none";
+      $("btnProjArchiveSel").style.display = write ? "" : "none";
       $("btnProjWfSave").style.display = write ? "" : "none";
+      active.querySelectorAll(".proj-all").forEach((box) => {
+        box.onchange = () => {
+          const section = box.closest("table");
+          section.querySelectorAll(".proj-pick").forEach((p) => { p.checked = box.checked; });
+        };
+      });
       active.querySelectorAll(".proj-archive").forEach((btn) => {
         btn.onclick = async () => {
           if (!confirm("Archive this code? Artists cannot use it until you restore it.")) return;
@@ -2185,16 +2345,18 @@
           if (code == null) return;
           const note = prompt("Note", btn.dataset.note || "");
           if (note == null) return;
+          const group = prompt("Group (blank = no group)", btn.dataset.group || "");
+          if (group == null) return;
           try {
             await api("/admin/api/projects/save", {
               method: "POST",
-              body: JSON.stringify({ id: btn.dataset.id, code: code.trim(), note: note.trim() }),
+              body: JSON.stringify({ id: btn.dataset.id, code: code.trim(), note: note.trim(), group: group.trim() }),
             });
             await loadProjects();
           } catch (err) { showMsg($("projMsg"), err.message, false); }
         };
       });
-      archived.querySelectorAll(".proj-restore").forEach((btn) => {
+      $("projArchived").querySelectorAll(".proj-restore").forEach((btn) => {
         btn.onclick = async () => {
           try {
             await api("/admin/api/projects/restore", { method: "POST", body: JSON.stringify({ id: btn.dataset.id }) });
@@ -2202,12 +2364,79 @@
           } catch (err) { showMsg($("projMsg"), err.message, false); }
         };
       });
+      renderProjSearch();
     }
+
+    async function loadProjects() {
+      const data = await api("/admin/api/projects");
+      PROJ = data;
+      fillProjGroupSelects();
+      const write = can("machines.edit");
+      const required = new Set(data.require_workflows || []);
+      $("projWorkflows").innerHTML = (data.workflows || []).map((name) => `
+        <label style="display:flex;align-items:center;gap:8px;margin:6px 0">
+          <input type="checkbox" class="proj-wf" value="${esc(name)}" ${required.has(name) ? "checked" : ""} ${write ? "" : "disabled"} />
+          <code>${esc(name)}</code>
+        </label>`).join("") || `<p class="hint">No workflow files found.</p>`;
+      renderProjects();
+    }
+    $("projSearch").addEventListener("input", () => renderProjects());
+    $("projFilterGroup").addEventListener("change", () => renderProjects());
+    $("projSort").addEventListener("change", () => renderProjects());
+    $("btnProjOpen").onclick = () => {
+      (PROJ.groups || []).forEach((g) => { projOpen[g] = true; });
+      projOpen["No group"] = true;
+      renderProjects();
+    };
+    $("btnProjClose").onclick = () => {
+      projOpen = {};
+      renderProjects();
+    };
+    $("btnProjArchiveSel").onclick = async () => {
+      const ids = Array.from(document.querySelectorAll(".proj-pick:checked")).map((el) => el.value);
+      if (!ids.length) {
+        showMsg($("projMsg"), "Select one or more codes first", false);
+        return;
+      }
+      if (!confirm("Archive " + ids.length + " code(s)?")) return;
+      try {
+        const out = await api("/admin/api/projects/archive-many", {
+          method: "POST",
+          body: JSON.stringify({ ids }),
+        });
+        showMsg($("projMsg"), "Archived " + (out.updated || ids.length), true);
+        await loadProjects();
+      } catch (err) { showMsg($("projMsg"), err.message, false); }
+    };
+    $("btnProjImport").onclick = async () => {
+      try {
+        const out = await api("/admin/api/projects/import", {
+          method: "POST",
+          body: JSON.stringify({
+            group: $("projImportGroup").value,
+            text: $("projBulk").value,
+          }),
+        });
+        const bits = [];
+        if ((out.added || []).length) bits.push("added " + out.added.length);
+        if ((out.moved || []).length) bits.push("moved " + out.moved.length);
+        if ((out.restored || []).length) bits.push("restored " + out.restored.length);
+        if ((out.already || []).length) bits.push("already there " + out.already.length);
+        if ((out.invalid || []).length) bits.push("skipped " + out.invalid.join(", "));
+        showMsg($("projMsg"), (out.group || "Import") + ": " + (bits.join(" · ") || "nothing to import"), true);
+        $("projBulk").value = "";
+        await loadProjects();
+      } catch (err) { showMsg($("projMsg"), err.message, false); }
+    };
     $("btnProjAdd").onclick = async () => {
       try {
         await api("/admin/api/projects/save", {
           method: "POST",
-          body: JSON.stringify({ code: $("projCode").value.trim(), note: $("projNote").value.trim() }),
+          body: JSON.stringify({
+            code: $("projCode").value.trim(),
+            note: $("projNote").value.trim(),
+            group: $("projGroup").value,
+          }),
         });
         $("projCode").value = "";
         $("projNote").value = "";

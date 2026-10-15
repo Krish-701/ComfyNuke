@@ -21,6 +21,17 @@ from typing import Any, Dict, List, Optional, Tuple
 _LOCK = threading.RLock()
 _CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,39}$")
 
+DEFAULT_GROUPS = (
+    "Roto",
+    "MM",
+    "CH-Paint",
+    "HYD-Paint",
+    "Comp",
+    "CG",
+    "DMP",
+    "All-Group",
+)
+
 SEED_CODES = (
     "OIG_SYMU",
     "LBP_EXS",
@@ -64,6 +75,27 @@ def workflow_name(raw: str) -> str:
     return name
 
 
+def normalize_group(raw: str) -> str:
+    text = " ".join(str(raw or "").split())
+    return text[:40]
+
+
+def parse_code_list(raw: str) -> List[str]:
+    text = str(raw or "").replace(";", ",").replace("\n", ",").replace("\t", ",")
+    out = []
+    seen = set()
+    for part in text.split(","):
+        code = normalize_code(part)
+        if not code:
+            continue
+        key = code_key(code)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(code)
+    return out
+
+
 class ProjectCodes:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -93,6 +125,7 @@ class ProjectCodes:
                     {
                         "id": str(row.get("id") or _new_id()),
                         "code": code,
+                        "group": normalize_group(row.get("group") or ""),
                         "note": str(row.get("note") or "").strip(),
                         "archived": bool(row.get("archived")),
                         "created_at": int(row.get("created_at") or _now()),
@@ -104,7 +137,16 @@ class ProjectCodes:
                 base = workflow_name(name)
                 if base and base not in req:
                     req.append(base)
-            self._cfg = {"codes": codes, "require_workflows": req}
+            groups = []
+            for name in list(DEFAULT_GROUPS) + list(data.get("groups") or []):
+                g = normalize_group(name)
+                if g and g not in groups:
+                    groups.append(g)
+            for row in codes:
+                g = row.get("group") or ""
+                if g and g not in groups:
+                    groups.append(g)
+            self._cfg = {"codes": codes, "require_workflows": req, "groups": groups}
             if not codes:
                 self._cfg = self._seed()
                 self._save_unlocked()
@@ -116,6 +158,7 @@ class ProjectCodes:
                 {
                     "id": _new_id(),
                     "code": code,
+                    "group": "",
                     "note": "",
                     "archived": False,
                     "created_at": now,
@@ -124,6 +167,7 @@ class ProjectCodes:
                 for code in SEED_CODES
             ],
             "require_workflows": [],
+            "groups": list(DEFAULT_GROUPS),
         }
 
     def _save_unlocked(self) -> None:
@@ -173,10 +217,11 @@ class ProjectCodes:
         with _LOCK:
             codes = [dict(c) for c in self._cfg.get("codes") or []]
             required = list(self._cfg.get("require_workflows") or [])
+            groups = list(self._cfg.get("groups") or list(DEFAULT_GROUPS))
         active = [c for c in codes if not c.get("archived")]
         archived = [c for c in codes if c.get("archived")]
-        active.sort(key=lambda c: code_key(c.get("code") or ""))
-        archived.sort(key=lambda c: code_key(c.get("code") or ""))
+        active.sort(key=lambda c: (code_key(c.get("group") or ""), code_key(c.get("code") or "")))
+        archived.sort(key=lambda c: (code_key(c.get("group") or ""), code_key(c.get("code") or "")))
         names = []
         for name in discovered or []:
             base = workflow_name(name)
@@ -189,17 +234,34 @@ class ProjectCodes:
             "ok": True,
             "codes": active,
             "archived": archived,
+            "groups": groups,
             "require_workflows": required,
             "workflows": names,
         }
 
-    def save_code(self, code: str, note: str = "", entry_id: str = "") -> Dict[str, Any]:
+    def _remember_group(self, group: str) -> None:
+        g = normalize_group(group)
+        if not g:
+            return
+        groups = list(self._cfg.get("groups") or [])
+        if g not in groups:
+            groups.append(g)
+            self._cfg["groups"] = groups
+
+    def save_code(
+        self,
+        code: str,
+        note: str = "",
+        entry_id: str = "",
+        group: str = "",
+    ) -> Dict[str, Any]:
         text = normalize_code(code)
         if not _CODE_RE.match(text):
             raise ValueError(
                 "Project code must be 2–40 letters, numbers, _ or -"
             )
         note_s = str(note or "").strip()[:200]
+        group_s = normalize_group(group)
         with _LOCK:
             rows = list(self._cfg.get("codes") or [])
             key = code_key(text)
@@ -223,6 +285,7 @@ class ProjectCodes:
                 target = {
                     "id": _new_id(),
                     "code": text,
+                    "group": group_s,
                     "note": note_s,
                     "archived": False,
                     "created_at": now,
@@ -231,8 +294,10 @@ class ProjectCodes:
                 rows.append(target)
             else:
                 target["code"] = text
+                target["group"] = group_s
                 target["note"] = note_s
                 target["updated_at"] = now
+            self._remember_group(group_s)
             self._cfg["codes"] = rows
             self._save_unlocked()
             return dict(target)
@@ -259,6 +324,77 @@ class ProjectCodes:
             self._cfg["codes"] = rows
             self._save_unlocked()
             return dict(target)
+
+    def set_archived_many(self, ids: List[str], archived: bool) -> Dict[str, Any]:
+        updated = []
+        missing = []
+        errors = []
+        for raw_id in ids or []:
+            entry_id = str(raw_id or "").strip()
+            if not entry_id:
+                continue
+            try:
+                updated.append(self.set_archived(entry_id, archived))
+            except ValueError as e:
+                msg = str(e)
+                if "not found" in msg:
+                    missing.append(entry_id)
+                else:
+                    errors.append({"id": entry_id, "error": msg})
+        return {"updated": len(updated), "missing": missing, "errors": errors}
+
+    def import_codes(self, raw: str, group: str) -> Dict[str, Any]:
+        group_s = normalize_group(group)
+        if not group_s:
+            raise ValueError("Pick a group before importing")
+        added = []
+        moved = []
+        same = []
+        restored = []
+        invalid = []
+        for code in parse_code_list(raw):
+            if not _CODE_RE.match(code):
+                invalid.append(code)
+                continue
+            key = code_key(code)
+            with _LOCK:
+                rows = list(self._cfg.get("codes") or [])
+                hit = None
+                for row in rows:
+                    if code_key(row.get("code") or "") == key:
+                        hit = row
+                        break
+            if hit is None:
+                added.append(self.save_code(code, group=group_s)["code"])
+                continue
+            if hit.get("archived"):
+                self.set_archived(str(hit.get("id")), False)
+                self.save_code(
+                    code,
+                    note=str(hit.get("note") or ""),
+                    entry_id=str(hit.get("id")),
+                    group=group_s,
+                )
+                restored.append(str(hit.get("code") or code))
+                continue
+            if normalize_group(hit.get("group") or "") == group_s:
+                same.append(str(hit.get("code") or code))
+                continue
+            self.save_code(
+                str(hit.get("code") or code),
+                note=str(hit.get("note") or ""),
+                entry_id=str(hit.get("id")),
+                group=group_s,
+            )
+            moved.append(str(hit.get("code") or code))
+        return {
+            "group": group_s,
+            "added": added,
+            "moved": moved,
+            "already": same,
+            "restored": restored,
+            "invalid": invalid,
+        }
 
     def set_required(self, names: List[str]) -> List[str]:
         clean = []

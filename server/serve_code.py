@@ -834,7 +834,9 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             "/admin/api/set_group_workflow": "machines.edit",
             "/admin/api/machines/import": "machines.edit",
             "/admin/api/projects/save": "machines.edit",
+            "/admin/api/projects/import": "machines.edit",
             "/admin/api/projects/archive": "machines.edit",
+            "/admin/api/projects/archive-many": "machines.edit",
             "/admin/api/projects/restore": "machines.edit",
             "/admin/api/projects/workflows": "machines.edit",
         }
@@ -1008,11 +1010,30 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                         str(data.get("code") or ""),
                         note=str(data.get("note") or ""),
                         entry_id=str(data.get("id") or ""),
+                        group=str(data.get("group") or ""),
                     )
                 except ValueError as e:
                     self._send_json({"ok": False, "error": str(e)}, status=400)
                     return True
                 self._send_json({"ok": True, "code": row})
+                return True
+            if path_only == "/admin/api/projects/import":
+                try:
+                    out = self.projects.import_codes(
+                        str(data.get("text") or data.get("codes") or ""),
+                        str(data.get("group") or ""),
+                    )
+                except ValueError as e:
+                    self._send_json({"ok": False, "error": str(e)}, status=400)
+                    return True
+                self._send_json({"ok": True, **out})
+                return True
+            if path_only == "/admin/api/projects/archive-many":
+                ids = data.get("ids") or []
+                if not isinstance(ids, list):
+                    ids = []
+                out = self.projects.set_archived_many([str(i) for i in ids], True)
+                self._send_json({"ok": True, **out})
                 return True
             if path_only == "/admin/api/projects/archive":
                 try:
