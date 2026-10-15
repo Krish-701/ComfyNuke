@@ -212,6 +212,7 @@
           <button type="button" class="tab active" data-tab="access">Access control</button>
           <button type="button" class="tab" data-tab="wfacl">Workflow access</button>
           <button type="button" class="tab" data-tab="routes">Workflow servers</button>
+          <button type="button" class="tab" data-tab="projects">Project maintenance</button>
           <button type="button" class="tab" data-tab="logs">Usage logs</button>
           <button type="button" class="tab hidden" data-tab="users" id="tabUsersBtn">Users &amp; roles</button>
         </div>
@@ -440,6 +441,48 @@
         </div>
       </div>
 
+      <div id="tabProjects" class="hidden">
+        <div class="card">
+          <h2>Project codes</h2>
+          <p class="hint">Artists must type a code that matches this list. Caps and small letters both match. Archive hides a code without deleting its history.</p>
+          <div class="row">
+            <div>
+              <label>Code</label>
+              <input id="projCode" type="text" placeholder="OIG_SYMU" />
+            </div>
+            <div style="flex:2">
+              <label>Note</label>
+              <input id="projNote" type="text" placeholder="optional" />
+            </div>
+            <div style="flex:0 0 auto;margin-bottom:12px">
+              <button id="btnProjAdd" type="button">Add</button>
+            </div>
+          </div>
+          <div id="projMsg"></div>
+          <div class="log-table-wrap">
+            <table>
+              <thead><tr><th>Code</th><th>Note</th><th></th></tr></thead>
+              <tbody id="projActive"></tbody>
+            </table>
+          </div>
+          <h2 style="margin-top:18px">Archived</h2>
+          <div class="log-table-wrap">
+            <table>
+              <thead><tr><th>Code</th><th>Note</th><th></th></tr></thead>
+              <tbody id="projArchived"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Workflows that require a project code</h2>
+          <p class="hint">Tick a workflow and artists must enter a matching code before that tool runs. Unticked tools stay open. Machines marked <b>Skip project code</b> on Access control are not asked.</p>
+          <div id="projWorkflows"></div>
+          <div class="row tight" style="margin-top:12px">
+            <button id="btnProjWfSave" type="button">Save workflow ticks</button>
+          </div>
+        </div>
+      </div>
+
       <div id="tabLogs" class="hidden">
         <div class="card">
           <h2>Find job — who ran this?</h2>
@@ -497,14 +540,19 @@
                 <option value="api">Other API</option>
               </select>
             </div>
+            <div>
+              <label>Project</label>
+              <input id="logProject" type="text" placeholder="OIG_SYMU" style="margin:0" />
+            </div>
             <div style="flex:1">
               <label>Search</label>
-              <input id="logQ" class="search" type="text" placeholder="IP, name, prompt id, machine id…" style="margin:0" />
+              <input id="logQ" class="search" type="text" placeholder="IP, name, prompt id, project code…" style="margin:0" />
             </div>
             <button id="btnLogRefresh" type="button">Refresh</button>
             <button id="btnCsvEvents" class="secondary" type="button">Export events CSV</button>
             <button id="btnCsvSummary" class="secondary" type="button">Export people CSV</button>
             <button id="btnCsvWorkflows" class="secondary" type="button">Export workflows CSV</button>
+            <button id="btnCsvProjects" class="secondary" type="button">Export projects CSV</button>
             <div>
               <label>People sort</label>
               <select id="peopleSort" style="margin:0">
@@ -519,6 +567,24 @@
             </label>
           </div>
           <div id="logMsg"></div>
+          <h2 style="margin-top:16px">Projects — who used the code</h2>
+          <p class="hint">One finished job is one iteration. <b>(no code)</b> is R&amp;D skip, or a workflow that was not ticked.</p>
+          <div class="log-table-wrap" style="margin-top:10px">
+            <table>
+              <thead>
+                <tr>
+                  <th>Project</th>
+                  <th>Queued</th>
+                  <th>Done</th>
+                  <th>Errors</th>
+                  <th>Duration</th>
+                  <th>People</th>
+                  <th>Who (iterations)</th>
+                </tr>
+              </thead>
+              <tbody id="projSummaryBody"></tbody>
+            </table>
+          </div>
           <h2 style="margin-top:16px">Workflows — runs and duration</h2>
           <p class="hint">Counts are by <b>Nuke menu</b> (Edit Image, Edit Image Hi-res, Ref Hi-res, …), not JSON version. Updating <code>Edit_Image_Hi_res_v04.json</code> to v05 still counts as Edit Image Hi-res.</p>
           <div class="log-table-wrap" style="margin-top:10px">
@@ -553,6 +619,7 @@
                   <th>Group</th>
                   <th>IP</th>
                   <th>Workflow</th>
+                  <th>Projects</th>
                   <th>Jobs queued</th>
                   <th>Jobs done</th>
                   <th>Total runtime</th>
@@ -577,6 +644,7 @@
                   <th>Name</th>
                   <th>Group</th>
                   <th>IP</th>
+                  <th>Project</th>
                   <th>Machine ID</th>
                   <th>Workflow</th>
                   <th>Path</th>
@@ -660,6 +728,13 @@
         <span>Enabled</span>
         <label class="switch" style="margin:0">
           <input id="editEnabled" type="checkbox" />
+          <span class="slider"></span>
+        </label>
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <span>Skip project code (R&amp;D)</span>
+        <label class="switch" style="margin:0">
+          <input id="editSkipProject" type="checkbox" />
           <span class="slider"></span>
         </label>
       </label>
@@ -784,7 +859,7 @@
         <td><code>${esc(e.ip)}</code></td>
         <td>${esc(e.label || "—")}</td>
         <td><span class="badge">${esc(e.group || STATE.ungrouped_name)}</span></td>
-        <td>${e.workflow_restrict ? `<span class="badge">${(e.allowed_workflows||[]).length} wf</span>` : `<span class="badge">all</span>`}</td>
+        <td>${e.workflow_restrict ? `<span class="badge">${(e.allowed_workflows||[]).length} wf</span>` : `<span class="badge">all</span>`}${e.skip_project_code === "1" || e.skip_project_code === true ? ` <span class="badge">no code</span>` : ""}</td>
         <td>
           ${can("machines.edit") ? `<label class="switch">
             <input type="checkbox" class="tog-ip" data-ip="${esc(e.ip)}" ${on ? "checked" : ""} />
@@ -796,7 +871,8 @@
           ${can("machines.edit") ? `<button type="button" class="secondary btn-edit"
             data-id="${esc(e.id)}" data-ip="${esc(e.ip)}"
             data-label="${esc(e.label || "")}" data-group="${esc(e.group || "")}"
-            data-enabled="${on ? "1" : "0"}">Edit</button>
+            data-enabled="${on ? "1" : "0"}"
+            data-skip="${e.skip_project_code === "1" || e.skip_project_code === true ? "1" : "0"}">Edit</button>
           <button type="button" class="secondary btn-wfs" data-ip="${esc(e.ip)}">Workflows</button>
           <button type="button" class="danger btn-rm" data-ip="${esc(e.ip)}" data-id="${esc(e.id)}">Remove</button>` : `<span class="hint">read-only</span>`}
         </td>
@@ -852,6 +928,7 @@
           $("tabAccess").classList.add("hidden");
           $("tabWfacl").classList.remove("hidden");
           $("tabRoutes").classList.add("hidden");
+          $("tabProjects").classList.add("hidden");
           $("tabLogs").classList.add("hidden");
           $("tabUsers").classList.add("hidden");
           $("wfaclIp").value = btn.dataset.ip || "";
@@ -987,6 +1064,7 @@
       $("editLabel").value = ds.label || "";
       $("editGroup").value = ds.group || "";
       $("editEnabled").checked = ds.enabled === "1";
+      $("editSkipProject").checked = ds.skip === "1";
       $("editModal").classList.remove("hidden");
     }
     function closeEdit() { $("editModal").classList.add("hidden"); }
@@ -1160,6 +1238,7 @@
             label: $("editLabel").value.trim(),
             group: $("editGroup").value.trim(),
             enabled: $("editEnabled").checked,
+            skip_project_code: $("editSkipProject").checked,
           }),
         });
         closeEdit();
@@ -1398,6 +1477,7 @@
         $("tabAccess").classList.toggle("hidden", name !== "access");
         $("tabWfacl").classList.toggle("hidden", name !== "wfacl");
         $("tabRoutes").classList.toggle("hidden", name !== "routes");
+        $("tabProjects").classList.toggle("hidden", name !== "projects");
         $("tabLogs").classList.toggle("hidden", name !== "logs");
         $("tabUsers").classList.toggle("hidden", name !== "users");
         if (name === "logs") {
@@ -1410,6 +1490,7 @@
         }
         if (name === "users") loadUsers();
         if (name === "routes") loadRoutes().catch((e) => showMsg($("routesMsg"), e.message, false));
+        if (name === "projects") loadProjects().catch((e) => showMsg($("projMsg"), e.message, false));
         if (name === "wfacl") {
           loadRoutes().catch(() => {}).finally(renderWfacl);
         }
@@ -1832,6 +1913,8 @@
       }
       if (ev) p.set("event", ev);
       if (q) p.set("q", q);
+      const proj = ($("logProject") && $("logProject").value || "").trim();
+      if (proj) p.set("project", proj);
       p.set("limit", "1000");
       return p.toString();
     }
@@ -1886,6 +1969,19 @@
           ["Users / machines", summ.count_users || 0],
         ].map(([title, n]) => `<div class="stat"><div class="n">${esc(n)}</div><div class="t">${esc(title)}</div></div>`).join("");
 
+        const pb = $("projSummaryBody");
+        if (pb) {
+          pb.innerHTML = (summ.projects || []).map((w) => `<tr>
+            <td class="mono">${esc(w.project || "—")}</td>
+            <td>${esc(w.jobs_queued || 0)}</td>
+            <td>${esc(w.jobs_done || 0)}</td>
+            <td>${esc(w.jobs_error || 0)}</td>
+            <td>${esc(fmtSec(w.total_runtime_sec))}</td>
+            <td>${esc(w.people || 0)}</td>
+            <td>${esc(w.users_label || "—")}</td>
+          </tr>`).join("") || `<tr><td colspan="7" class="hint">No project jobs in this range</td></tr>`;
+        }
+
         const wb = $("wfSummaryBody");
         wb.innerHTML = (summ.workflows || []).map((w) => `<tr>
           <td class="mono">${esc(w.workflow || "—")}</td>
@@ -1909,6 +2005,7 @@
           <td>${esc(short ? fmtNameShort(r.label) : (r.label || "—"))}</td>
           <td>${esc(r.group || "—")}</td>
           <td class="mono">${esc(r.ip || "")}</td>
+          <td class="mono">${esc(r.project_code || "—")}</td>
           <td class="mono">${esc(r.machine_id || "—")}</td>
           <td class="mono">${esc(r.tool || r.workflow || "—")}</td>
           <td class="mono">${esc((r.method || "") + " " + (r.path || ""))}</td>
@@ -1974,6 +2071,7 @@
           <td>${esc(u.group || "—")}</td>
           <td class="mono">${esc(u.ip || "")}</td>
           <td class="mono">${esc(u.workflows_label || "—")}</td>
+          <td class="mono">${esc(u.projects_label || "—")}</td>
           <td>${esc(u.jobs_queued || 0)}</td>
           <td>${esc(u.jobs_done || 0)}</td>
           <td>${esc(fmtSec(u.total_runtime_sec))}</td>
@@ -2039,6 +2137,93 @@
     };
     $("btnCsvWorkflows").onclick = () => {
       window.location.href = "/admin/api/logs/export_workflows.csv?" + logQuery();
+    };
+    if ($("btnCsvProjects")) $("btnCsvProjects").onclick = () => {
+      window.location.href = "/admin/api/logs/export_projects.csv?" + logQuery();
+    };
+
+    async function loadProjects() {
+      const data = await api("/admin/api/projects");
+      const write = can("machines.edit");
+      const active = $("projActive");
+      const archived = $("projArchived");
+      const row = (c, archivedRow) => `<tr>
+        <td class="mono">${esc(c.code)}</td>
+        <td>${esc(c.note || "")}</td>
+        <td class="actions">
+          ${write ? (archivedRow
+            ? `<button type="button" class="secondary proj-restore" data-id="${esc(c.id)}">Restore</button>`
+            : `<button type="button" class="secondary proj-edit" data-id="${esc(c.id)}" data-code="${esc(c.code)}" data-note="${esc(c.note || "")}">Edit</button>
+               <button type="button" class="danger proj-archive" data-id="${esc(c.id)}">Archive</button>`)
+            : ""}
+        </td>
+      </tr>`;
+      active.innerHTML = (data.codes || []).map((c) => row(c, false)).join("")
+        || `<tr><td colspan="3" class="hint">No active codes</td></tr>`;
+      archived.innerHTML = (data.archived || []).map((c) => row(c, true)).join("")
+        || `<tr><td colspan="3" class="hint">Nothing archived</td></tr>`;
+      const required = new Set(data.require_workflows || []);
+      $("projWorkflows").innerHTML = (data.workflows || []).map((name) => `
+        <label style="display:flex;align-items:center;gap:8px;margin:6px 0">
+          <input type="checkbox" class="proj-wf" value="${esc(name)}" ${required.has(name) ? "checked" : ""} ${write ? "" : "disabled"} />
+          <code>${esc(name)}</code>
+        </label>`).join("") || `<p class="hint">No workflow files found.</p>`;
+      $("btnProjAdd").style.display = write ? "" : "none";
+      $("btnProjWfSave").style.display = write ? "" : "none";
+      active.querySelectorAll(".proj-archive").forEach((btn) => {
+        btn.onclick = async () => {
+          if (!confirm("Archive this code? Artists cannot use it until you restore it.")) return;
+          try {
+            await api("/admin/api/projects/archive", { method: "POST", body: JSON.stringify({ id: btn.dataset.id }) });
+            await loadProjects();
+          } catch (err) { showMsg($("projMsg"), err.message, false); }
+        };
+      });
+      active.querySelectorAll(".proj-edit").forEach((btn) => {
+        btn.onclick = async () => {
+          const code = prompt("Project code", btn.dataset.code || "");
+          if (code == null) return;
+          const note = prompt("Note", btn.dataset.note || "");
+          if (note == null) return;
+          try {
+            await api("/admin/api/projects/save", {
+              method: "POST",
+              body: JSON.stringify({ id: btn.dataset.id, code: code.trim(), note: note.trim() }),
+            });
+            await loadProjects();
+          } catch (err) { showMsg($("projMsg"), err.message, false); }
+        };
+      });
+      archived.querySelectorAll(".proj-restore").forEach((btn) => {
+        btn.onclick = async () => {
+          try {
+            await api("/admin/api/projects/restore", { method: "POST", body: JSON.stringify({ id: btn.dataset.id }) });
+            await loadProjects();
+          } catch (err) { showMsg($("projMsg"), err.message, false); }
+        };
+      });
+    }
+    $("btnProjAdd").onclick = async () => {
+      try {
+        await api("/admin/api/projects/save", {
+          method: "POST",
+          body: JSON.stringify({ code: $("projCode").value.trim(), note: $("projNote").value.trim() }),
+        });
+        $("projCode").value = "";
+        $("projNote").value = "";
+        showMsg($("projMsg"), "Code saved", true);
+        await loadProjects();
+      } catch (err) { showMsg($("projMsg"), err.message, false); }
+    };
+    $("btnProjWfSave").onclick = async () => {
+      const workflows = Array.from(document.querySelectorAll(".proj-wf:checked")).map((el) => el.value);
+      try {
+        await api("/admin/api/projects/workflows", {
+          method: "POST",
+          body: JSON.stringify({ workflows }),
+        });
+        showMsg($("projMsg"), "Workflow ticks saved", true);
+      } catch (err) { showMsg($("projMsg"), err.message, false); }
     };
 
     // Portal label from URL (/admin vs /operator)

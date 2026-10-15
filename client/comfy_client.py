@@ -270,6 +270,7 @@ class ComfyClient:
         self.poll_interval_sec = float(poll_interval_sec)
         self.client_id = client_id or f"nuke-{socket.gethostname()}-{os.getpid()}"
         self.workflow_path = workflow_path or self._default_workflow_path()
+        self.project_code = ""
         self._workflow_template: Optional[Dict[str, Any]] = None
         # Resolved per-workflow (None until load_workflow)
         self.id_load: Optional[str] = None  # plate LoadImage
@@ -1052,6 +1053,7 @@ class ComfyClient:
             "extra_data": {
                 "workflow_file": wf_name,
                 "nuke_tool": _nuke_tool_from_filename(wf_name),
+                "project_code": str(getattr(self, "project_code", "") or "").strip(),
             },
         }
         result = self._post_json("/prompt", payload)

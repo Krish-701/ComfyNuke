@@ -177,6 +177,7 @@ def _normalize_entry(e: Dict[str, Any]) -> Dict[str, Any]:
         out["allowed_workflows"] = None  # all
     denied = _normalize_workflows(out.get("denied_workflows") or [])
     out["denied_workflows"] = denied if denied else []
+    out["skip_project_code"] = bool(out.get("skip_project_code"))
     return out
 
 
@@ -424,6 +425,7 @@ class AccessControl:
                 "enabled": "",
                 "workflow_mode": "all",
                 "allowed_workflows": [],
+                "skip_project_code": "0",
             }
         with self._lock:
             for entry in self._cfg.get("ips") or []:
@@ -441,6 +443,7 @@ class AccessControl:
                             "enabled": "1" if e.get("enabled") else "0",
                             "workflow_mode": "all" if wfs is None else "list",
                             "allowed_workflows": wfs if wfs is not None else [],
+                            "skip_project_code": "1" if e.get("skip_project_code") else "0",
                         }
                 except Exception:
                     continue
@@ -452,6 +455,7 @@ class AccessControl:
             "enabled": "",
             "workflow_mode": "all",
             "allowed_workflows": [],
+            "skip_project_code": "0",
         }
 
     def client_allowed(self, client_ip: str) -> Tuple[bool, str]:
@@ -808,6 +812,7 @@ class AccessControl:
         label: Optional[str] = None,
         group: Optional[str] = None,
         enabled: Optional[bool] = None,
+        skip_project_code: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Edit an existing entry: change IP, rename label, move group, toggle."""
         with self._lock:
@@ -837,6 +842,8 @@ class AccessControl:
                 self._remember_group(e["group"])
             if enabled is not None:
                 e["enabled"] = bool(enabled)
+            if skip_project_code is not None:
+                e["skip_project_code"] = bool(skip_project_code)
             ips[idx] = e
             self._cfg["ips"] = ips
             self._save_unlocked()

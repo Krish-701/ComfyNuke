@@ -43,8 +43,10 @@ if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
 from access_control import AccessControl  # noqa: E402
+from project_codes import ProjectCodes, workflow_name  # noqa: E402
 from workflow_routes import (  # noqa: E402
     default_upstream,
+    discover_workflow_files,
     load_routes,
     ping_upstream,
     save_routes,
@@ -494,6 +496,17 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             self._send_json(routes_snapshot(self._repo_root()))
             return True
 
+        if path_only == "/admin/api/projects":
+            if not self._require_perm("machines.view"):
+                return True
+            try:
+                self.projects.reload()
+            except Exception:
+                pass
+            discovered = discover_workflow_files(self._repo_root())
+            self._send_json(self.projects.snapshot(discovered))
+            return True
+
         if path_only == "/admin/api/comfy-routes/ping":
             if not self._require_perm("machines.view"):
                 return True
@@ -519,6 +532,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             "/admin/api/logs/export.csv",
             "/admin/api/logs/export_summary.csv",
             "/admin/api/logs/export_workflows.csv",
+            "/admin/api/logs/export_projects.csv",
         ):
             need = "logs.export" if "export" in path_only else "logs.view"
             if not self._require_perm(need):
@@ -589,6 +603,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             group = _one("group")
             event = _one("event")
             workflow = _one("workflow")
+            project = _one("project")
             q = _one("q")
             try:
                 limit = int(_one("limit", "500"))
@@ -654,6 +669,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                     group=group,
                     event=event,
                     workflow=workflow,
+                    project=project,
                     q=q,
                     limit=limit,
                 )
@@ -669,6 +685,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                     group=group,
                     event=event,
                     workflow=workflow,
+                    project=project,
                     q=q,
                     limit=min(limit, 50_000),
                     reverse=False,
@@ -698,6 +715,22 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                         (
                             "Content-Disposition",
                             'attachment; filename="pixedit_usage_summary.csv"',
+                        )
+                    ],
+                )
+                return True
+
+            if path_only == "/admin/api/logs/export_projects.csv":
+                payload = self.usage.summary(since=since, until=until)
+                csv_text = self.usage.to_csv(payload.get("projects") or [], kind="projects")
+                body = csv_text.encode("utf-8")
+                self._send_bytes(
+                    body,
+                    "text/csv; charset=utf-8",
+                    extra_headers=[
+                        (
+                            "Content-Disposition",
+                            'attachment; filename="pixedit_usage_projects.csv"',
                         )
                     ],
                 )
@@ -800,6 +833,10 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             "/admin/api/ip_workflow_remove": "machines.edit",
             "/admin/api/set_group_workflow": "machines.edit",
             "/admin/api/machines/import": "machines.edit",
+            "/admin/api/projects/save": "machines.edit",
+            "/admin/api/projects/archive": "machines.edit",
+            "/admin/api/projects/restore": "machines.edit",
+            "/admin/api/projects/workflows": "machines.edit",
         }
 
         try:
@@ -829,6 +866,11 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                     label=data.get("label"),
                     group=data.get("group"),
                     enabled=data.get("enabled") if "enabled" in data else None,
+                    skip_project_code=(
+                        data.get("skip_project_code")
+                        if "skip_project_code" in data
+                        else None
+                    ),
                 )
                 self._send_json({"ok": True, "entry": entry})
                 return True
@@ -960,6 +1002,41 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 out = self.access.import_machines_csv(csv_text)
                 self._send_json({"ok": True, **out})
                 return True
+            if path_only == "/admin/api/projects/save":
+                try:
+                    row = self.projects.save_code(
+                        str(data.get("code") or ""),
+                        note=str(data.get("note") or ""),
+                        entry_id=str(data.get("id") or ""),
+                    )
+                except ValueError as e:
+                    self._send_json({"ok": False, "error": str(e)}, status=400)
+                    return True
+                self._send_json({"ok": True, "code": row})
+                return True
+            if path_only == "/admin/api/projects/archive":
+                try:
+                    row = self.projects.set_archived(str(data.get("id") or ""), True)
+                except ValueError as e:
+                    self._send_json({"ok": False, "error": str(e)}, status=400)
+                    return True
+                self._send_json({"ok": True, "code": row})
+                return True
+            if path_only == "/admin/api/projects/restore":
+                try:
+                    row = self.projects.set_archived(str(data.get("id") or ""), False)
+                except ValueError as e:
+                    self._send_json({"ok": False, "error": str(e)}, status=400)
+                    return True
+                self._send_json({"ok": True, "code": row})
+                return True
+            if path_only == "/admin/api/projects/workflows":
+                names = data.get("workflows") or data.get("files") or []
+                if not isinstance(names, list):
+                    names = []
+                saved = self.projects.set_required([str(n) for n in names])
+                self._send_json({"ok": True, "require_workflows": saved})
+                return True
             if path_only == "/admin/api/set_group_workflow":
                 out = self.access.set_group_workflow(
                     group=str(data.get("group") or ""),
@@ -977,6 +1054,78 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
 
         self._send_json({"error": "unknown admin API"}, status=404)
         return True
+
+    def _workflow_from_prompt_body(self, body: Optional[bytes]) -> Tuple[str, Dict[str, Any], str]:
+        payload: Dict[str, Any] = {}
+        extra: Dict[str, Any] = {}
+        client_id = ""
+        if body:
+            try:
+                parsed = json.loads(body.decode("utf-8"))
+                if isinstance(parsed, dict):
+                    payload = parsed
+            except Exception:
+                payload = {}
+        prompt = payload.get("prompt") if isinstance(payload.get("prompt"), dict) else {}
+        raw_extra = payload.get("extra_data")
+        if isinstance(raw_extra, dict):
+            extra = raw_extra
+        client_id = str(payload.get("client_id") or "")
+        hint = workflow_name(
+            str(extra.get("workflow_file") or extra.get("workflow") or "")
+        )
+        wf_name = infer_workflow(
+            prompt,
+            client_id=client_id,
+            extra=extra,
+            repo_root=self._repo_root(),
+        )
+        if not wf_name and hint:
+            wf_name = hint
+        return wf_name, payload, client_id
+
+    def _enforce_project_code(self, body: Optional[bytes], ident: Dict[str, str]) -> Optional[bytes]:
+        """Return stamped body, or None after sending a 403."""
+        try:
+            self.projects.reload()
+        except Exception:
+            pass
+        wf_name, payload, client_id = self._workflow_from_prompt_body(body)
+        extra = payload.get("extra_data") if isinstance(payload.get("extra_data"), dict) else {}
+        raw_code = str(extra.get("project_code") or "")
+        skip = str(ident.get("skip_project_code") or "") in ("1", "true", "True")
+        ok, canonical, err = self.projects.check(wf_name, raw_code, skip)
+        if not ok:
+            msg = err or "Project code not recognized"
+            try:
+                self.usage.log(
+                    event=EVENT_ACCESS_DENIED,
+                    ip=ident.get("ip") or self._client_ip(),
+                    machine_id=ident.get("id") or "",
+                    label=ident.get("label") or "",
+                    group=ident.get("group") or "",
+                    method="POST",
+                    path="/prompt",
+                    status=403,
+                    client_id=client_id,
+                    workflow=wf_name,
+                    detail="project_code: " + msg,
+                    project_code=raw_code.strip(),
+                )
+            except Exception:
+                pass
+            self._send_json(
+                {"error": msg, "workflow": wf_name, "project_code": raw_code.strip()},
+                status=403,
+            )
+            return None
+        extra = dict(extra)
+        extra["workflow_file"] = extra.get("workflow_file") or wf_name
+        extra["project_code"] = canonical
+        extra["project_bypass"] = bool(skip and self.projects.requires(wf_name))
+        payload = dict(payload)
+        payload["extra_data"] = extra
+        return json.dumps(payload).encode("utf-8")
 
     # ------------------------------------------------------------------ comfy proxy
     def _log_comfy_traffic(
@@ -1054,6 +1203,11 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                         client_id=client_id,
                         detail=detail,
                     )
+                    project_code = ""
+                    project_bypass = False
+                    if isinstance(extra, dict):
+                        project_code = str(extra.get("project_code") or "").strip()
+                        project_bypass = bool(extra.get("project_bypass"))
                     self.usage.track_job_start(
                         pid,
                         ip=base["ip"],
@@ -1064,6 +1218,8 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                         detail=detail,
                         workflow=wf_name,
                         tool=tool,
+                        project_code=project_code,
+                        project_bypass=project_bypass,
                     )
                 else:
                     self.usage.log(event=EVENT_API, detail="prompt_no_id", **base)
@@ -1145,6 +1301,12 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length > 0 else None
 
+        if method == "POST" and path.rstrip("/") == "/prompt":
+            stamped = self._enforce_project_code(body, ident)
+            if stamped is None:
+                return
+            body = stamped
+
         headers = {}
         for k in ("Content-Type", "Accept", "User-Agent", "Authorization"):
             if self.headers.get(k):
@@ -1225,6 +1387,28 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             if self._handle_admin_get(path_only):
                 return
             self.send_error(404)
+            return
+
+        if path_only == "/projects/policy":
+            if not self._require_artist_ip():
+                return
+            try:
+                self.projects.reload()
+                self.access.reload()
+            except Exception:
+                pass
+            qs = parse_qs(urlparse(self.path).query)
+            wf = workflow_name(str((qs.get("workflow") or [""])[0] or ""))
+            ident = self._identity()
+            skip = str(ident.get("skip_project_code") or "") in ("1", "true", "True")
+            self._send_json(
+                {
+                    "ok": True,
+                    "workflow": wf,
+                    "required": bool(wf) and self.projects.requires(wf) and not skip,
+                    "exempt": skip,
+                }
+            )
             return
 
         # Live route table for Nuke (IP gated + per-IP workflow filter)
@@ -1426,6 +1610,37 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 return
             self.send_error(404)
             return
+        if path_only == "/projects/validate":
+            if not self._require_artist_ip():
+                return
+            try:
+                self.projects.reload()
+                self.access.reload()
+            except Exception:
+                pass
+            data = self._read_json_body()
+            wf = workflow_name(str(data.get("workflow") or ""))
+            ident = self._identity()
+            skip = str(ident.get("skip_project_code") or "") in ("1", "true", "True")
+            ok, canonical, err = self.projects.check(
+                wf, str(data.get("code") or ""), skip
+            )
+            if not ok:
+                self._send_json(
+                    {"ok": False, "error": err, "workflow": wf},
+                    status=403,
+                )
+                return
+            self._send_json(
+                {
+                    "ok": True,
+                    "workflow": wf,
+                    "code": canonical,
+                    "required": self.projects.requires(wf) and not skip,
+                    "exempt": skip,
+                }
+            )
+            return
         if (
             path_only == "/comfyui"
             or path_only.startswith("/comfyui/")
@@ -1539,6 +1754,7 @@ def main() -> int:
     # Bind access + comfy onto handler class (shared by threads)
     ComfyNukeHandler.access = access
     ComfyNukeHandler.usage = usage
+    ComfyNukeHandler.projects = ProjectCodes(root / "server" / "project_codes.json")
     ComfyNukeHandler.comfy_upstream = args.comfy_upstream.rstrip("/")
     ComfyNukeHandler.admin_html_path = admin_html
 

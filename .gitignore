@@ -37,5 +37,7 @@ studio_config.json
 .comfynuke/
 server/access_control.json
 server/access_control.json.tmp
+server/project_codes.json
+server/project_codes.json.tmp
 server/usage_logs.jsonl
 server/usage_logs.jsonl.tmp

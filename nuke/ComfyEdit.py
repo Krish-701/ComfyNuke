@@ -572,6 +572,147 @@ def _schedule_ms(delay_ms, fn):
     return False
 
 
+def _http_json(url, data=None, timeout=20):
+    try:
+        from urllib.request import Request, urlopen
+    except ImportError:
+        from urllib2 import Request, urlopen  # type: ignore
+    body = None
+    headers = {"Cache-Control": "no-cache", "User-Agent": "ComfyNuke-Project/1.0"}
+    if data is not None:
+        body = json.dumps(data).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = Request(url, data=body, headers=headers)
+    try:
+        resp = urlopen(req, timeout=timeout)
+    except Exception as e:
+        raw = getattr(e, "read", lambda: b"")()
+        if not raw:
+            raise
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except Exception:
+            raise e
+    try:
+        raw = resp.read()
+    finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        return {}
+
+
+def _project_policy(workflow_path):
+    name = os.path.basename(str(workflow_path or "").replace("\\", "/"))
+    base = (os.environ.get("COMFYNUKE_CODE_BASE") or CODE_BASE_URL or "").rstrip("/")
+    if not base or not name:
+        return {"required": False, "exempt": False, "workflow": name}
+    try:
+        from urllib.parse import quote
+    except ImportError:
+        from urllib import quote  # type: ignore
+    info = _http_json("%s/projects/policy?workflow=%s" % (base, quote(name)))
+    if not isinstance(info, dict):
+        info = {}
+    info.setdefault("workflow", name)
+    return info
+
+
+def _validate_project_code(workflow_path, code):
+    name = os.path.basename(str(workflow_path or "").replace("\\", "/"))
+    base = (os.environ.get("COMFYNUKE_CODE_BASE") or CODE_BASE_URL or "").rstrip("/")
+    if not base:
+        raise RuntimeError("Code server URL is not set")
+    info = _http_json(
+        "%s/projects/validate" % base,
+        {"workflow": name, "code": str(code or "")},
+    )
+    if not isinstance(info, dict):
+        info = {}
+    return info
+
+
+def _ask_project_code():
+    if nuke is None:
+        return ""
+    import nukescripts  # type: ignore
+
+    class ProjectCodePanel(nukescripts.PythonPanel):
+        def __init__(self):
+            nukescripts.PythonPanel.__init__(self, "Project code")
+            self.code = nuke.String_Knob("project_code", "Project code")
+            self.help_txt = nuke.Text_Knob(
+                "help_txt",
+                "",
+                "This workflow needs a project code.<br>"
+                "Caps or small letters both match.",
+            )
+            self.addKnob(self.code)
+            self.addKnob(self.help_txt)
+
+    panel = ProjectCodePanel()
+    if not panel.showModalDialog():
+        return None
+    return str(panel.code.value() or "").strip()
+
+
+def _project_output_dir(base, code):
+    base = base or DEFAULT_OUT
+    text = str(code or "").strip()
+    if not text:
+        return base
+    safe = "".join(ch if (ch.isalnum() or ch in "-_") else "_" for ch in text)
+    path = os.path.join(base, safe).replace("\\", "/")
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception:
+        return base
+    return path
+
+
+def _apply_project_gate(workflow, output_dir, project_code=None):
+    """
+    Return (canonical_code, output_dir) or None when the job must stop.
+    Unticked workflows and R&D machines skip the code.
+    """
+    try:
+        policy = _project_policy(workflow)
+    except Exception as e:
+        if nuke is not None:
+            nuke.message("Cannot check project code:\n%s" % e)
+        else:
+            _log("project policy failed: %s" % e)
+        return None
+    if not policy.get("required"):
+        return "", output_dir or DEFAULT_OUT
+    code = str(project_code or "").strip()
+    if not code:
+        code = _ask_project_code()
+        if code is None:
+            _log("Project code cancelled")
+            return None
+    try:
+        result = _validate_project_code(workflow, code)
+    except Exception as e:
+        if nuke is not None:
+            nuke.message("Cannot check project code:\n%s" % e)
+        return None
+    if not result.get("ok"):
+        err = result.get("error") or "Project code not recognized"
+        if nuke is not None:
+            nuke.message("Project code\n\n%s" % err)
+        else:
+            _log(err)
+        return None
+    canonical = str(result.get("code") or code).strip()
+    _log("Project code %s" % canonical)
+    return canonical, _project_output_dir(output_dir, canonical)
+
+
 def _log(msg):
     """Log only — no popups. Main-thread only (never call from Python threads)."""
     if nuke is not None:
@@ -2947,6 +3088,7 @@ def run_edit_on_node(
     output_dir=DEFAULT_OUT,
     frame=None,
     background=True,
+    project_code="",
 ):
     """
     ALL on Nuke main thread (crash-safe):
@@ -3107,6 +3249,7 @@ def run_edit_on_node(
             timeout_sec=600.0,
             poll_interval_sec=2.0,
         )
+        client.project_code = project_code or ""
         _log("Uploading plate_srgb + mask_luma to Comfy...")
         wf_base = os.path.basename(str(wf_path or "")).replace(" ", "_").lower()
         is_ref_job = _is_ref_workflow(wf_path)
@@ -3697,6 +3840,7 @@ def schedule_edit(
     seed=None,
     output_dir=DEFAULT_OUT,
     frame=None,
+    project_code="",
     _attempt=0,
 ):
     if nuke is None:
@@ -3723,6 +3867,11 @@ def schedule_edit(
     workflow = workflow or DEFAULT_WORKFLOW
     server = resolve_server_for_workflow(workflow, fallback=server or DEFAULT_SERVER)
     output_dir = output_dir or DEFAULT_OUT
+    if _attempt == 0:
+        gated = _apply_project_gate(workflow, output_dir, project_code)
+        if gated is None:
+            return
+        project_code, output_dir = gated
 
     if _attempt == 0:
         _log("Scheduled: node=%s frame=%s (export then background Comfy)" % (
@@ -3740,6 +3889,7 @@ def schedule_edit(
                 output_dir=output_dir,
                 frame=frame,
                 background=True,
+                project_code=project_code,
             )
         except Exception as e:
             msg = str(e).lower()
@@ -3755,6 +3905,7 @@ def schedule_edit(
                         seed=seed,
                         output_dir=output_dir,
                         frame=frame,
+                        project_code=project_code,
                         _attempt=_attempt + 1,
                     ),
                 )
@@ -3845,6 +3996,7 @@ def show_panel(initial_prompt=None, workflow=None):
             self.use_random_seed.setFlag(nuke.STARTLINE)
             self.out_dir = nuke.String_Knob("output_dir", "Output dir")
             self.out_dir.setValue(DEFAULT_OUT)
+            self.project_code = nuke.String_Knob("project_code", "Project code")
             help_hires = (
                 "<b>Hi-res v04</b> on 192.168.91.12:8166.<br>"
                 "Plate → node <b>500</b>, mask_luma → <b>499</b>, prompt → <b>494</b>.<br>"
@@ -3874,6 +4026,7 @@ def show_panel(initial_prompt=None, workflow=None):
                 self.prompt,
                 self.seed,
                 self.use_random_seed,
+                self.project_code,
                 self.out_dir,
                 self.help_txt,
             ):
@@ -3904,6 +4057,7 @@ def show_panel(initial_prompt=None, workflow=None):
         seed=seed,
         output_dir=p.out_dir.value() or DEFAULT_OUT,
         frame=frame,
+        project_code=p.project_code.value(),
     )
 
 
@@ -4248,6 +4402,7 @@ def schedule_image_gen(
     output_dir=DEFAULT_OUT,
     width=1920,
     height=1080,
+    project_code="",
     _attempt=0,
 ):
     """
@@ -4275,6 +4430,11 @@ def schedule_image_gen(
 
     wf_path = workflow or IMAGE_GEN_WORKFLOW
     server = resolve_server_for_workflow(wf_path, fallback=server or DEFAULT_SERVER)
+    out_dir = output_dir or DEFAULT_OUT
+    gated = _apply_project_gate(wf_path, out_dir, project_code)
+    if gated is None:
+        return
+    project_code, out_dir = gated
     # Pull latest Image_generation_*.json from code server before using cache
     try:
         wf_path = _refresh_workflow_from_server(wf_path)
@@ -4286,7 +4446,6 @@ def schedule_image_gen(
     if not os.path.isfile(wf_path):
         nuke.message("Workflow not found:\n%s" % wf_path)
         return
-    out_dir = output_dir or DEFAULT_OUT
     os.makedirs(out_dir, exist_ok=True)
     frame = int(nuke.frame())
 
@@ -4315,6 +4474,7 @@ def schedule_image_gen(
             poll_interval_sec=2.0,
             client_id="nuke-t2i-%s-%s" % (host, stamp),
         )
+        client.project_code = project_code or ""
         _log("Image Gen — load workflow %s" % wf_path)
         client.load_workflow()
 
@@ -4449,6 +4609,7 @@ def show_image_gen_panel():
             self.use_random_seed.setFlag(nuke.STARTLINE)
             self.out_dir = nuke.String_Knob("output_dir", "Output dir")
             self.out_dir.setValue(DEFAULT_OUT)
+            self.project_code = nuke.String_Knob("project_code", "Project code")
             self.help_txt = nuke.Text_Knob(
                 "help_txt",
                 "",
@@ -4465,6 +4626,7 @@ def show_image_gen_panel():
                 self.height,
                 self.seed,
                 self.use_random_seed,
+                self.project_code,
                 self.out_dir,
                 self.help_txt,
             ):
@@ -4484,6 +4646,7 @@ def show_image_gen_panel():
         output_dir=p.out_dir.value() or DEFAULT_OUT,
         width=int(p.width.value()),
         height=int(p.height.value()),
+        project_code=p.project_code.value(),
     )
 
 
@@ -4576,6 +4739,7 @@ def schedule_image_to_video(
     seed=None,
     output_dir=DEFAULT_OUT,
     frame=None,
+    project_code="",
 ):
     """
     Image-to-video (MiniMax H3):
@@ -4631,6 +4795,10 @@ def schedule_image_to_video(
         nuke.message("Workflow not found:\n%s" % wf_path)
         return
     out_dir = output_dir or DEFAULT_OUT
+    gated = _apply_project_gate(wf_path, out_dir, project_code)
+    if gated is None:
+        return
+    project_code, out_dir = gated
     os.makedirs(out_dir, exist_ok=True)
     if frame is None:
         frame = int(nuke.frame())
@@ -4661,6 +4829,7 @@ def schedule_image_to_video(
             timeout_sec=1800.0,  # video can be long
             poll_interval_sec=3.0,
         )
+        client.project_code = project_code or ""
         _log("I2V — load workflow %s" % wf_path)
         client.load_workflow()
         _log(
@@ -4748,6 +4917,7 @@ def show_image_to_video_panel():
             self.use_random_seed.setFlag(nuke.STARTLINE)
             self.out_dir = nuke.String_Knob("output_dir", "Output dir")
             self.out_dir.setValue(DEFAULT_OUT)
+            self.project_code = nuke.String_Knob("project_code", "Project code")
             self.help_txt = nuke.Text_Knob(
                 "help_txt",
                 "",
@@ -4761,6 +4931,7 @@ def show_image_to_video_panel():
                 self.prompt,
                 self.seed,
                 self.use_random_seed,
+                self.project_code,
                 self.out_dir,
                 self.help_txt,
             ):
@@ -4793,6 +4964,7 @@ def show_image_to_video_panel():
         seed=seed,
         output_dir=p.out_dir.value() or DEFAULT_OUT,
         frame=frame,
+        project_code=p.project_code.value(),
     )
 
 
@@ -4802,6 +4974,7 @@ def schedule_image_description(
     server=DEFAULT_SERVER,
     workflow=IMAGE_DESC_WORKFLOW,
     frame=None,
+    project_code="",
 ):
     """
     Image → LLM prompt (Image_Description_v01.json).
@@ -4853,6 +5026,10 @@ def schedule_image_description(
     if not os.path.isfile(wf_path):
         nuke.message("Workflow not found:\n%s" % wf_path)
         return
+    gated = _apply_project_gate(wf_path, DEFAULT_OUT, project_code)
+    if gated is None:
+        return
+    project_code, _ignored_out = gated
     if frame is None:
         frame = int(nuke.frame())
 
@@ -4878,6 +5055,7 @@ def schedule_image_description(
             poll_interval_sec=2.0,
             client_id="nuke-desc-%s-%s" % (host, stamp),
         )
+        client.project_code = project_code or ""
         _log("Describe — load workflow %s" % wf_path)
         client.load_workflow()
         client.id_prompt = IMAGE_DESC_PROMPT_NODE
@@ -4945,6 +5123,7 @@ def schedule_image_outpaint(
     seed=None,
     output_dir=DEFAULT_OUT,
     frame=None,
+    project_code="",
 ):
     """
     Image Outpaint (Image_outpaint_v01.json) on 192.168.91.12:8166.
@@ -5001,6 +5180,10 @@ def schedule_image_outpaint(
     if frame is None:
         frame = int(nuke.frame())
     out_dir = output_dir or DEFAULT_OUT
+    gated = _apply_project_gate(wf_path, out_dir, project_code)
+    if gated is None:
+        return
+    project_code, out_dir = gated
     os.makedirs(out_dir, exist_ok=True)
 
     _BG_JOB_ACTIVE = True
@@ -5025,6 +5208,7 @@ def schedule_image_outpaint(
             poll_interval_sec=2.0,
             client_id="nuke-outpaint-%s-%s" % (host, stamp),
         )
+        client.project_code = project_code or ""
         _log("Outpaint — load workflow %s" % wf_path)
         client.load_workflow()
         client.id_load = IMAGE_OUTPAINT_LOAD
@@ -5119,6 +5303,7 @@ def show_image_outpaint_panel():
             self.use_random_seed.setFlag(nuke.STARTLINE)
             self.out_dir = nuke.String_Knob("output_dir", "Output dir")
             self.out_dir.setValue(DEFAULT_OUT)
+            self.project_code = nuke.String_Knob("project_code", "Project code")
             self.help_txt = nuke.Text_Knob(
                 "help_txt",
                 "",
@@ -5132,6 +5317,7 @@ def show_image_outpaint_panel():
                 self.prompt,
                 self.seed,
                 self.use_random_seed,
+                self.project_code,
                 self.out_dir,
                 self.help_txt,
             ):
@@ -5150,6 +5336,7 @@ def show_image_outpaint_panel():
         seed=seed,
         output_dir=p.out_dir.value() or DEFAULT_OUT,
         frame=frame,
+        project_code=p.project_code.value(),
     )
 
 
@@ -5189,6 +5376,7 @@ def show_image_description_panel():
                     "this frame. Then provide a concise edit prompt to remove the ( )"
                 )
             self.prompt.setValue(start_p)
+            self.project_code = nuke.String_Knob("project_code", "Project code")
             self.help_txt = nuke.Text_Knob(
                 "help_txt",
                 "",
@@ -5198,7 +5386,7 @@ def show_image_description_panel():
                 "Image → LoadImage <b>5</b>. Your text → node <b>4</b>. "
                 "Result → StickyNote next to the selected node.",
             )
-            for k in (self.server, self.workflow, self.prompt, self.help_txt):
+            for k in (self.server, self.workflow, self.prompt, self.project_code, self.help_txt):
                 self.addKnob(k)
 
     p = ImageDescPanel()
@@ -5211,6 +5399,7 @@ def show_image_description_panel():
         server=p.server.value().strip(),
         workflow=p.workflow.value(),
         frame=frame,
+        project_code=p.project_code.value(),
     )
 
 

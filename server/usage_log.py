@@ -349,6 +349,8 @@ class UsageLog:
         detail: str = "",
         workflow: str = "",
         tool: str = "",
+        project_code: str = "",
+        project_bypass: bool = False,
     ) -> Dict[str, Any]:
         tool = (tool or infer_nuke_tool(workflow=workflow, client_id=client_id, detail=detail) or "")
         rec = self.log(
@@ -365,6 +367,8 @@ class UsageLog:
             detail=detail or "queued",
             workflow=workflow or "",
             tool=tool,
+            project_code=project_code or "",
+            project_bypass=bool(project_bypass),
         )
         with self._lock:
             self._open_jobs[str(prompt_id)] = {
@@ -376,6 +380,8 @@ class UsageLog:
                 "client_id": client_id,
                 "workflow": workflow or "",
                 "tool": tool,
+                "project_code": project_code or "",
+                "project_bypass": bool(project_bypass),
             }
         return rec
 
@@ -402,6 +408,8 @@ class UsageLog:
                 "group": "",
                 "client_id": "",
                 "workflow": "",
+                "project_code": "",
+                "project_bypass": False,
             }
         now = time.time()
         runtime = max(0.0, float(now - float(start.get("start_ts") or now)))
@@ -424,6 +432,8 @@ class UsageLog:
                 workflow=str(start.get("workflow") or ""),
                 client_id=str(start.get("client_id") or ""),
             ),
+            project_code=start.get("project_code") or "",
+            project_bypass=bool(start.get("project_bypass")),
         )
 
     def iter_records(
@@ -436,6 +446,7 @@ class UsageLog:
         group: str = "",
         event: str = "",
         workflow: str = "",
+        project: str = "",
         q: str = "",
         limit: int = 500,
         reverse: bool = True,
@@ -445,6 +456,7 @@ class UsageLog:
         group = (group or "").strip().lower()
         event = (event or "").strip()
         workflow = (workflow or "").strip()
+        project = (project or "").strip().casefold()
         q = (q or "").strip().lower()
         limit = max(1, min(int(limit or 500), 50_000))
 
@@ -483,6 +495,8 @@ class UsageLog:
                 continue
             if workflow and str(rec.get("workflow") or "") != workflow:
                 continue
+            if project and str(rec.get("project_code") or "").casefold() != project:
+                continue
             if q:
                 blob = " ".join(
                     str(rec.get(k) or "")
@@ -498,6 +512,8 @@ class UsageLog:
                         "detail",
                         "machine_id",
                         "workflow",
+                        "tool",
+                        "project_code",
                     )
                 ).lower()
                 if q not in blob:
@@ -610,6 +626,7 @@ class UsageLog:
                     "first_iso": r.get("ts_iso"),
                     "last_iso": r.get("ts_iso"),
                     "workflow_counts": {},
+                    "project_counts": {},
                 },
             )
             # refresh identity
@@ -645,6 +662,19 @@ class UsageLog:
                     slot["jobs_done"] += 1
                 else:
                     slot["jobs_error"] += 1
+
+            pcode = str(r.get("project_code") or "").strip()
+            if ev in (EVENT_JOB_QUEUE, EVENT_JOB_DONE, EVENT_JOB_ERROR) and pcode:
+                pc = u.setdefault("project_counts", {})
+                pslot = pc.setdefault(
+                    pcode, {"jobs_queued": 0, "jobs_done": 0, "jobs_error": 0}
+                )
+                if ev == EVENT_JOB_QUEUE:
+                    pslot["jobs_queued"] += 1
+                elif ev == EVENT_JOB_DONE:
+                    pslot["jobs_done"] += 1
+                else:
+                    pslot["jobs_error"] += 1
 
             if ev == EVENT_JOB_QUEUE:
                 u["jobs_queued"] += 1
@@ -700,6 +730,23 @@ class UsageLog:
                 names.append(n)
             u["workflows"] = names
             u["workflows_label"] = ", ".join(parts) if parts else ""
+            pc_parts = []
+            for pname, info in sorted(
+                (u.get("project_counts") or {}).items(),
+                key=lambda kv: (
+                    -(int((kv[1] or {}).get("jobs_done") or 0)
+                      + int((kv[1] or {}).get("jobs_queued") or 0)),
+                    kv[0],
+                ),
+            ):
+                info = info or {}
+                jd = int(info.get("jobs_done") or 0)
+                jq = int(info.get("jobs_queued") or 0)
+                show = jd or jq
+                if not show:
+                    continue
+                pc_parts.append("%s (%s)" % (pname, jd if jd else jq))
+            u["projects_label"] = ", ".join(pc_parts) if pc_parts else ""
             users.append(u)
         users.sort(
             key=lambda x: (-float(x.get("total_runtime_sec") or 0), -int(x.get("jobs_done") or 0))
@@ -778,12 +825,84 @@ class UsageLog:
         totals["workflows"] = len(
             [w for w in workflows if w.get("workflow") and w.get("workflow") != "(unknown)"]
         )
+
+        by_proj: Dict[str, Dict[str, Any]] = {}
+        people_by_proj: Dict[str, set] = defaultdict(set)
+        for r in rows:
+            ev = str(r.get("event") or "")
+            if ev not in (EVENT_JOB_QUEUE, EVENT_JOB_DONE, EVENT_JOB_ERROR):
+                continue
+            pcode = str(r.get("project_code") or "").strip() or "(no code)"
+            slot = by_proj.setdefault(
+                pcode,
+                {
+                    "project": pcode,
+                    "jobs_queued": 0,
+                    "jobs_done": 0,
+                    "jobs_error": 0,
+                    "total_runtime_sec": 0.0,
+                    "people": 0,
+                    "users_label": "",
+                },
+            )
+            who = str(r.get("label") or "").strip() or str(r.get("ip") or "")
+            if who:
+                people_by_proj[pcode].add(who)
+            if ev == EVENT_JOB_QUEUE:
+                slot["jobs_queued"] += 1
+            elif ev == EVENT_JOB_DONE:
+                slot["jobs_done"] += 1
+                slot["total_runtime_sec"] += float(r.get("runtime_sec") or 0)
+            elif ev == EVENT_JOB_ERROR:
+                slot["jobs_error"] += 1
+        user_counts: Dict[str, Dict[str, Dict[str, int]]] = defaultdict(
+            lambda: defaultdict(lambda: {"jobs_queued": 0, "jobs_done": 0})
+        )
+        for r in rows:
+            ev = str(r.get("event") or "")
+            if ev not in (EVENT_JOB_QUEUE, EVENT_JOB_DONE):
+                continue
+            pcode = str(r.get("project_code") or "").strip() or "(no code)"
+            who = str(r.get("label") or "").strip() or str(r.get("ip") or "") or "?"
+            bucket = user_counts[pcode][who]
+            if ev == EVENT_JOB_QUEUE:
+                bucket["jobs_queued"] += 1
+            else:
+                bucket["jobs_done"] += 1
+        projects = []
+        for pcode, slot in by_proj.items():
+            slot["total_runtime_sec"] = round(float(slot["total_runtime_sec"]), 2)
+            slot["people"] = len(people_by_proj.get(pcode) or [])
+            bits = []
+            ranked_users = sorted(
+                user_counts.get(pcode, {}).items(),
+                key=lambda kv: (
+                    -(kv[1].get("jobs_done") or 0) - (kv[1].get("jobs_queued") or 0),
+                    kv[0],
+                ),
+            )
+            for who, info in ranked_users:
+                n = int(info.get("jobs_done") or 0) or int(info.get("jobs_queued") or 0)
+                if n:
+                    bits.append("%s (%s)" % (who, n))
+            slot["users_label"] = ", ".join(bits)
+            projects.append(slot)
+        projects.sort(
+            key=lambda x: (
+                str(x.get("project") or "") == "(no code)",
+                -int(x.get("jobs_done") or 0),
+                -int(x.get("jobs_queued") or 0),
+                str(x.get("project") or ""),
+            )
+        )
         return {
             "totals": totals,
             "users": users,
             "workflows": workflows,
+            "projects": projects,
             "count_users": len(users),
             "count_workflows": len(workflows),
+            "count_projects": len(projects),
         }
 
     def to_csv(
@@ -809,6 +928,7 @@ class UsageLog:
                 "total_runtime_sec",
                 "avg_runtime_sec",
                 "workflows_label",
+                "projects_label",
                 "bytes_in",
                 "bytes_out",
                 "first_iso",
@@ -834,6 +954,21 @@ class UsageLog:
             for r in records:
                 w.writerow({k: r.get(k, "") for k in fieldnames})
             return buf.getvalue()
+        if kind == "projects":
+            fieldnames = [
+                "project",
+                "jobs_queued",
+                "jobs_done",
+                "jobs_error",
+                "total_runtime_sec",
+                "people",
+                "users_label",
+            ]
+            w = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+            w.writeheader()
+            for r in records:
+                w.writerow({k: r.get(k, "") for k in fieldnames})
+            return buf.getvalue()
         else:
             fieldnames = [
                 "id",
@@ -851,6 +986,8 @@ class UsageLog:
                 "client_id",
                 "workflow",
                 "tool",
+                "project_code",
+                "project_bypass",
                 "runtime_sec",
                 "duration_ms",
                 "bytes_in",
