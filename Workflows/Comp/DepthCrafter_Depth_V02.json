@@ -1,0 +1,227 @@
+{
+  "1": {
+    "inputs": {
+      "force_size": 512,
+      "num_inference_steps": 10,
+      "guidance_scale": 1.2000000000000002,
+      "window_size": 110,
+      "overlap": 25,
+      "depthcrafter_model": [
+        "2",
+        0
+      ],
+      "images": [
+        "24",
+        0
+      ]
+    },
+    "class_type": "DepthCrafter",
+    "_meta": {
+      "title": "DepthCrafter"
+    }
+  },
+  "2": {
+    "inputs": {
+      "enable_model_cpu_offload": true,
+      "enable_sequential_cpu_offload": false
+    },
+    "class_type": "DownloadAndLoadDepthCrafterModel",
+    "_meta": {
+      "title": "DownloadAndLoadDepthCrafterModel"
+    }
+  },
+  "3": {
+    "inputs": {
+      "video": "KOMODO_01.mp4",
+      "force_rate": 0,
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 0,
+      "skip_first_frames": 0,
+      "select_every_nth": 1,
+      "format": "AnimateDiff"
+    },
+    "class_type": "VHS_LoadVideo",
+    "_meta": {
+      "title": "Load Video (Upload) 🎥🅥🅗🅢"
+    }
+  },
+  "23": {
+    "inputs": {
+      "video_info": [
+        "3",
+        3
+      ]
+    },
+    "class_type": "VHS_VideoInfo",
+    "_meta": {
+      "title": "Video Info 🎥🅥🅗🅢"
+    }
+  },
+  "24": {
+    "inputs": {
+      "resize_type": "scale shorter dimension",
+      "resize_type.shorter_size": 768,
+      "scale_method": "lanczos",
+      "input": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "ResizeImageMaskNode",
+    "_meta": {
+      "title": "Resize Image/Mask"
+    }
+  },
+  "25": {
+    "inputs": {
+      "output": "",
+      "source": [
+        "23",
+        8
+      ]
+    },
+    "class_type": "Display Any (rgthree)",
+    "_meta": {
+      "title": "Display Any (rgthree)"
+    }
+  },
+  "26": {
+    "inputs": {
+      "output": "",
+      "source": [
+        "23",
+        9
+      ]
+    },
+    "class_type": "Display Any (rgthree)",
+    "_meta": {
+      "title": "Display Any (rgthree)"
+    }
+  },
+  "27": {
+    "inputs": {
+      "fps": [
+        "23",
+        0
+      ],
+      "bit_depth": 10,
+      "color_space": "sRGB",
+      "codec": "auto",
+      "images": [
+        "34",
+        0
+      ]
+    },
+    "class_type": "CreateVideo",
+    "_meta": {
+      "title": "Create Video"
+    }
+  },
+  "28": {
+    "inputs": {
+      "upscale_method": "lanczos",
+      "width": [
+        "23",
+        8
+      ],
+      "height": [
+        "23",
+        9
+      ],
+      "crop": "disabled",
+      "image": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "ImageScale",
+    "_meta": {
+      "title": "Upscale Image"
+    }
+  },
+  "29": {
+    "inputs": {
+      "scale": 1,
+      "quality": "ULTRA",
+      "deblur": "HIGH",
+      "images": [
+        "28",
+        0
+      ]
+    },
+    "class_type": "RTXVideoSuperResolution",
+    "_meta": {
+      "title": "RTX Video Super Resolution"
+    }
+  },
+  "30": {
+    "inputs": {
+      "filename_prefix": "video/ComfyUI",
+      "format": "auto",
+      "format.codec": "auto",
+      "codec": "auto",
+      "video": [
+        "27",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "34": {
+    "inputs": {
+      "on_mismatch": "error",
+      "source": [
+        "3",
+        0
+      ],
+      "result": [
+        "29",
+        0
+      ]
+    },
+    "class_type": "KrishFrameParityCheck",
+    "_meta": {
+      "title": "Krish FINAL Parity (vs original)"
+    }
+  },
+  "35": {
+    "inputs": {
+      "source": [
+        "34",
+        1
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "Frames / size check"
+    }
+  },
+  "36": {
+    "inputs": {
+      "source": [
+        "23",
+        0
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "Output fps (= source fps)"
+    }
+  },
+  "37": {
+    "inputs": {
+      "source": [
+        "23",
+        6
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "Frames loaded from the video"
+    }
+  }
+}

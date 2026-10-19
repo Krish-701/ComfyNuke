@@ -61,6 +61,8 @@ _SYNC_FILES = (
     "Workflows/Image_outpaint_v01.json",
     "Workflows/Image_Description_v01.json",
     "Workflows/video_minimax_h3_i2v.json",
+    "Workflows/Comp/DepthCrafter_Depth_V02.json",
+    "Workflows/Comp/LTX_2.5-Alpha-Mate_V01.json",
     "studio_config.json",  # optional
     "studio_config.example.json",
     "workflow_routes.json",
@@ -87,6 +89,8 @@ _ALWAYS_REFRESH = frozenset(
         "Workflows/Image_outpaint_v01.json",
         "Workflows/Image_Description_v01.json",
         "Workflows/video_minimax_h3_i2v.json",
+        "Workflows/Comp/DepthCrafter_Depth_V02.json",
+        "Workflows/Comp/LTX_2.5-Alpha-Mate_V01.json",
         "workflow_routes.json",
         "studio_config.json",
     ]
@@ -258,6 +262,8 @@ def _sync_from_server(base_url, cache, server_manifest, force_all=False):
             or "image_description" in rel.lower()
             or "video_" in rel
             or rel.endswith("_i2v.json")
+            or "depthcrafter" in rel.lower()
+            or "/comp/" in rel.lower()
         )
         need = force_all or always or _file_needs_update(cache, rel, entry)
         if not need:
@@ -432,8 +438,10 @@ def bootstrap():
     _log("    out:   %s" % getattr(ComfyEdit, "IMAGE_OUTPAINT_WORKFLOW", ""))
     _log("    desc:  %s" % getattr(ComfyEdit, "IMAGE_DESC_WORKFLOW", ""))
     _log("    i2v:   %s" % getattr(ComfyEdit, "I2V_WORKFLOW", ""))
+    _log("    comp:  %s" % getattr(ComfyEdit, "COMP_DEPTH_WORKFLOW", ""))
+    _log("    alpha: %s" % getattr(ComfyEdit, "COMP_ALPHA_WORKFLOW", ""))
     _log("  Menu: Nuke > Pix-Edit")
-    _log("    Edit Image | Hi-res | Ref Hi-res | Gen | Describe | I2V | Ping")
+    _log("    Edit Image | Hi-res | Ref Hi-res | Gen | Describe | I2V | Comp | Ping")
     _log("  Jobs share one ComfyUI queue on the Ubuntu GPU.")
     _log("=" * 56)
     return ComfyEdit

@@ -211,6 +211,8 @@ CORE_NUKE_TOOLS = (
     "Image Outpaint",
     "Image Description",
     "Image to Video",
+    "Comp Depth",
+    "Video Alpha Mate",
 )
 
 
@@ -241,6 +243,10 @@ def nuke_tool_from_filename(name: str) -> str:
         return "Image Outpaint"
     if "upscale" in b:
         return "Image Upscale"
+    if "depthcrafter" in b or "depth_crafter" in b:
+        return "Comp Depth"
+    if "alpha_mate" in b or "alphamate" in b or "alpha-mate" in b:
+        return "Video Alpha Mate"
     if "video" in b or "i2v" in b or "minimax" in b:
         return "Image to Video"
     parts = [
@@ -273,6 +279,10 @@ def infer_nuke_tool(
         return "Image Gen"
     if "nuke-outpaint" in blob or "outpaint" in blob:
         return "Image Outpaint"
+    if "nuke-alpha" in blob or "alpha_mate" in blob or "alphamate" in blob:
+        return "Video Alpha Mate"
+    if "nuke-comp" in blob or "depthcrafter" in blob:
+        return "Comp Depth"
     if "nuke-i2v" in blob or "i2v" in blob:
         return "Image to Video"
     return ""

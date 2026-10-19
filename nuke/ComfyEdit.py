@@ -172,6 +172,18 @@ IMAGE_OUTPAINT_LOAD = "13"
 IMAGE_OUTPAINT_PROMPT = "73"
 IMAGE_OUTPAINT_SAVE = "110"
 IMAGE_OUTPAINT_DEFAULT_PROMPT = "outpaint the image in red marked area"
+COMP_DEPTH_REL = "Workflows/Comp/DepthCrafter_Depth_V02.json"
+COMP_DEPTH_WORKFLOW = os.path.join(REPO_ROOT, COMP_DEPTH_REL).replace("\\", "/")
+COMP_DEPTH_LOAD = "3"  # VHS_LoadVideo.video
+COMP_DEPTH_SAVE = "30"  # SaveVideo
+COMP_ALPHA_REL = "Workflows/Comp/LTX_2.5-Alpha-Mate_V01.json"
+COMP_ALPHA_WORKFLOW = os.path.join(REPO_ROOT, COMP_ALPHA_REL).replace("\\", "/")
+COMP_ALPHA_LOAD = "9133"  # VHS_LoadVideo.video (Comp-98.mp4)
+COMP_ALPHA_SAVE = "9112"  # SaveVideo
+_COMP_WORKFLOW_NAMES = (
+    "DepthCrafter_Depth_V02.json",
+    "LTX_2.5-Alpha-Mate_V01.json",
+)
 IMAGE_DESC_PROMPT_NODE = "4"
 IMAGE_DESC_LOAD_NODE = "5"
 IMAGE_DESC_OUTPUT_NODE = "12"
@@ -471,7 +483,8 @@ def _refresh_workflow_from_server(wf_path, timeout=60):
     """
     if not wf_path:
         return wf_path
-    rel = os.path.basename(str(wf_path).replace("\\", "/"))
+    norm = str(wf_path).replace("\\", "/")
+    rel = os.path.basename(norm)
     if not rel.lower().endswith(".json"):
         return wf_path
     base = (os.environ.get("COMFYNUKE_CODE_BASE") or CODE_BASE_URL or "").strip().rstrip(
@@ -479,9 +492,21 @@ def _refresh_workflow_from_server(wf_path, timeout=60):
     )
     if not base:
         return wf_path
-    # New layout is Workflows/<name>. Keep the old root URL so a hub that has
-    # not restarted, or an older cache path, still refreshes.
-    rels = ["Workflows/%s" % rel, rel]
+    # Nested graphs (Workflows/Comp/...) must be requested by relative path.
+    # Flat Workflows/<name> and the old root URL stay as fallbacks.
+    rels = []
+    root_norm = str(REPO_ROOT).replace("\\", "/").rstrip("/")
+    if norm.startswith(root_norm + "/"):
+        rels.append(norm[len(root_norm) + 1 :])
+    if rel in _COMP_WORKFLOW_NAMES:
+        rels.append("Workflows/Comp/%s" % rel)
+    rels.append("Workflows/%s" % rel)
+    rels.append(rel)
+    seen_rel = []
+    for item in rels:
+        if item not in seen_rel:
+            seen_rel.append(item)
+    rels = seen_rel
     data = None
     url = ""
     last_err = None
@@ -636,6 +661,68 @@ def _validate_project_code(workflow_path, code):
     return info
 
 
+# One entry covers this job plus the next ones, 6 jobs in total, any workflow.
+PROJECT_CODE_STAY = 6
+
+
+def _project_code_store_path():
+    folder = os.path.join(os.path.expanduser("~"), ".comfynuke")
+    try:
+        if not os.path.isdir(folder):
+            os.makedirs(folder)
+    except Exception:
+        pass
+    return os.path.join(folder, "project_code.json")
+
+
+def _load_project_code_memory():
+    path = _project_code_store_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {"code": "", "left": 0}
+    if not isinstance(data, dict):
+        return {"code": "", "left": 0}
+    try:
+        left = int(data.get("left") or 0)
+    except Exception:
+        left = 0
+    return {"code": str(data.get("code") or "").strip(), "left": max(0, left)}
+
+
+def _save_project_code_memory(code, left):
+    path = _project_code_store_path()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"code": code, "left": int(left)}, f)
+    except Exception as e:
+        _log("could not remember project code: %s" % e)
+
+
+def _remembered_project_code():
+    """Code still inside the 6-job window. Empty when it is time to ask again."""
+    mem = _load_project_code_memory()
+    if mem["left"] > 0 and mem["code"]:
+        return mem["code"]
+    return ""
+
+
+def _same_project_code(a, b):
+    return str(a or "").strip().casefold() == str(b or "").strip().casefold()
+
+
+def _consume_project_code(canonical):
+    """Count this job. A new code starts a fresh run of PROJECT_CODE_STAY."""
+    mem = _load_project_code_memory()
+    if _same_project_code(mem.get("code"), canonical) and int(mem.get("left") or 0) > 0:
+        left = int(mem["left"]) - 1
+    else:
+        left = PROJECT_CODE_STAY - 1
+    _save_project_code_memory(canonical, left)
+    return left
+
+
 def _ask_project_code():
     if nuke is None:
         return ""
@@ -649,7 +736,9 @@ def _ask_project_code():
                 "help_txt",
                 "",
                 "This workflow needs a project code.<br>"
-                "Caps or small letters both match.",
+                "Caps or small letters both match.<br>"
+                "Nuke keeps this code for <b>%d</b> jobs, then asks again."
+                % PROJECT_CODE_STAY,
             )
             self.addKnob(self.code)
             self.addKnob(self.help_txt)
@@ -689,14 +778,19 @@ def _apply_project_gate(workflow, output_dir, project_code=None):
         return None
     if not policy.get("required"):
         return "", output_dir or DEFAULT_OUT
-    code = str(project_code or "").strip()
-    if not code:
-        code = _ask_project_code()
-        if code is None:
+    typed = str(project_code or "").strip()
+    remembered = _remembered_project_code()
+    if not typed and remembered:
+        typed = remembered
+    elif typed and remembered and _same_project_code(typed, remembered):
+        typed = remembered
+    elif not typed:
+        typed = _ask_project_code()
+        if typed is None:
             _log("Project code cancelled")
             return None
     try:
-        result = _validate_project_code(workflow, code)
+        result = _validate_project_code(workflow, typed)
     except Exception as e:
         if nuke is not None:
             nuke.message("Cannot check project code:\n%s" % e)
@@ -708,8 +802,12 @@ def _apply_project_gate(workflow, output_dir, project_code=None):
         else:
             _log(err)
         return None
-    canonical = str(result.get("code") or code).strip()
-    _log("Project code %s" % canonical)
+    canonical = str(result.get("code") or typed).strip()
+    left = _consume_project_code(canonical)
+    if left > 0:
+        _log("Project code %s — kept for %d more job(s)" % (canonical, left))
+    else:
+        _log("Project code %s — next job will ask for the code again" % canonical)
     return canonical, _project_output_dir(output_dir, canonical)
 
 
@@ -3427,10 +3525,150 @@ def run_edit_on_node(
     return None
 
 
+def _mp4_video_frame_count(path):
+    """
+    Frame count from an mp4/mov video track (stts/stsz).
+    Works inside Nuke when ffprobe and OpenCV are not installed.
+    Returns 0 if the file is not a readable movie container.
+    """
+    import struct
+
+    def _atoms(f, start, end):
+        pos = int(start)
+        end = int(end)
+        while pos + 8 <= end:
+            f.seek(pos)
+            hdr = f.read(8)
+            if len(hdr) < 8:
+                break
+            size, typ = struct.unpack(">I4s", hdr)
+            header = 8
+            if size == 1 and pos + 16 <= end:
+                size = struct.unpack(">Q", f.read(8))[0]
+                header = 16
+            elif size == 0:
+                size = end - pos
+            if size < header or pos + size > end:
+                break
+            yield typ, pos + header, pos + size
+            pos += size
+
+    def _sample_count(f, start, end):
+        """Sum of samples in stts, else stsz. Descends mdia/minf/stbl."""
+        found = 0
+        for typ, a, b in _atoms(f, start, end):
+            if typ == b"stts" and b - a >= 8:
+                f.seek(a + 4)
+                raw = f.read(4)
+                if len(raw) < 4:
+                    continue
+                entries = struct.unpack(">I", raw)[0]
+                total = 0
+                entries = min(entries, 1000000)
+                blob = f.read(entries * 8)
+                for i in range(0, len(blob) - 7, 8):
+                    count = struct.unpack(">I", blob[i : i + 4])[0]
+                    total += count
+                if total > 0:
+                    return int(total)
+            if typ == b"stsz" and b - a >= 12:
+                f.seek(a + 8)
+                raw = f.read(4)
+                if len(raw) == 4:
+                    count = struct.unpack(">I", raw)[0]
+                    if count > 0:
+                        found = int(count)
+            if typ in (b"mdia", b"minf", b"stbl") and found <= 0:
+                nested = _sample_count(f, a, b)
+                if nested > 0:
+                    return int(nested)
+        return int(found)
+
+    def _handler(f, start, end):
+        for typ, a, b in _atoms(f, start, end):
+            if typ == b"hdlr" and b - a >= 12:
+                f.seek(a + 8)
+                raw = f.read(4)
+                if len(raw) == 4:
+                    return raw
+            if typ == b"mdia":
+                got = _handler(f, a, b)
+                if got:
+                    return got
+        return b""
+
+    try:
+        size = os.path.getsize(path)
+    except Exception:
+        return 0
+    if size < 16:
+        return 0
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in (".mp4", ".mov", ".m4v"):
+        return 0
+    best = 0
+    try:
+        with open(path, "rb") as f:
+            for typ, a, b in _atoms(f, 0, size):
+                if typ != b"moov":
+                    continue
+                for ttyp, ta, tb in _atoms(f, a, b):
+                    if ttyp != b"trak":
+                        continue
+                    kind = _handler(f, ta, tb)
+                    if kind == b"soun":
+                        continue
+                    count = 0
+                    for mtyp, ma, mb in _atoms(f, ta, tb):
+                        if mtyp == b"mdia":
+                            count = _sample_count(f, ma, mb)
+                            if not count:
+                                for styp, sa, sb in _atoms(f, ma, mb):
+                                    if styp == b"minf":
+                                        count = _sample_count(f, sa, sb)
+                                        break
+                            break
+                    if kind == b"vide" and count > 0:
+                        return int(count)
+                    if count > best:
+                        best = int(count)
+    except Exception as e:
+        _log("mp4 frame count skip: %s" % e)
+        return 0
+    return int(best)
+
+
+def _clip_playback_length(probed, nuke_first, nuke_last, root_first, root_last):
+    """
+    How many frames the returned movie should occupy.
+    A real probe wins. Nuke's own range is used only when it is not just
+    a copy of the script range (Nuke does that when the file has no length).
+    """
+    try:
+        n = int(probed or 0)
+    except Exception:
+        n = 0
+    if n > 1:
+        return n
+    try:
+        nuke_count = int(nuke_last) - int(nuke_first) + 1
+    except Exception:
+        nuke_count = 0
+    try:
+        root_count = int(root_last) - int(root_first) + 1
+    except Exception:
+        root_count = 0
+    if nuke_count > 1 and nuke_count != root_count:
+        return nuke_count
+    if n <= 0 and nuke_count > 1:
+        return nuke_count
+    return 1 if n < 1 else n
+
+
 def _probe_video_media(path):
     """
     Best-effort width/height/fps/frame_count for a movie file.
-    Tries ffprobe, then OpenCV. Returns dict or {}.
+    Tries ffprobe, the mp4 header, then OpenCV. Returns dict or {}.
     """
     info = {}
     if not path or not os.path.isfile(path):
@@ -3534,6 +3772,56 @@ def _probe_video_media(path):
         except Exception:
             pass
 
+    # mp4/mov sample count — Nuke machines often have no ffprobe
+    if not info.get("frames") or int(info.get("frames") or 0) <= 1:
+        counted = _mp4_video_frame_count(path)
+        if counted > 1:
+            info["frames"] = int(counted)
+
+    # decode-count only when the header still has no length
+    if not info.get("frames") or int(info.get("frames") or 0) <= 1:
+        try:
+            import json as _json
+            import subprocess
+
+            cmd = [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-count_frames",
+                "-show_entries",
+                "stream=nb_read_frames,nb_frames",
+                "-of",
+                "json",
+                path,
+            ]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if proc.returncode == 0 and proc.stdout:
+                data = _json.loads(proc.stdout)
+                streams = data.get("streams") or []
+                if streams:
+                    s = streams[0]
+                    for key in ("nb_read_frames", "nb_frames"):
+                        nb = s.get(key)
+                        if nb not in (None, "N/A", ""):
+                            try:
+                                n = int(nb)
+                            except Exception:
+                                n = 0
+                            if n > 1:
+                                info["frames"] = n
+                                break
+        except Exception as e:
+            _log("ffprobe count_frames skip: %s" % e)
+
     # --- OpenCV fallback ---
     if not info.get("width") or not info.get("frames"):
         try:
@@ -3562,69 +3850,37 @@ def _probe_video_media(path):
     return info
 
 
-def _apply_video_read_range(read, out_path):
+def _set_read_playback_range(read, first, last):
     """
-    Set Read first/last/orig* and format from the real movie length/size.
-    Avoids single-frame hold (first=last=1) on i2v results.
+    Read properties frame range = first..last, starting at frame 1.
+    Set orig* before first/last so Nuke does not clamp last back down.
     """
-    # Reload so Nuke opens the container
-    try:
-        if "reload" in read.knobs():
-            read["reload"].execute()
-    except Exception:
-        pass
-
-    probe = _probe_video_media(out_path)
-    first = 1
-    last = 1
-    w = probe.get("width")
-    h = probe.get("height")
-    fps = probe.get("fps")
-    nframes = probe.get("frames")
-
-    # Prefer Nuke's own orig range when it looks valid (multi-frame)
-    try:
-        of = int(read["origfirst"].value()) if "origfirst" in read.knobs() else 1
-        ol = int(read["origlast"].value()) if "origlast" in read.knobs() else 1
-        if ol > of:
-            first, last = of, ol
-            nframes = last - first + 1
-        elif nframes and int(nframes) > 1:
-            first = 1
-            last = int(nframes)
-        elif ol == of == 1 and nframes and int(nframes) > 1:
-            first = 1
-            last = int(nframes)
-    except Exception:
-        if nframes and int(nframes) > 1:
-            first, last = 1, int(nframes)
-
+    first = int(first)
+    last = int(last)
     if last < first:
         last = first
-
-    try:
-        if "first" in read.knobs():
-            read["first"].setValue(int(first))
-        if "last" in read.knobs():
-            read["last"].setValue(int(last))
-        if "origfirst" in read.knobs():
-            read["origfirst"].setValue(int(first))
-        if "origlast" in read.knobs():
-            read["origlast"].setValue(int(last))
-    except Exception as e:
-        _log("video range knobs: %s" % e)
-
-    # frame_mode: start at first (play full clip in timeline)
     try:
         if "frame_mode" in read.knobs():
-            # enum: expression / start at / offset
-            read["frame_mode"].setValue("start at")
+            try:
+                read["frame_mode"].setValue("start at")
+            except Exception:
+                read["frame_mode"].setValue(1)
         if "frame" in read.knobs():
-            read["frame"].setValue(str(int(first)))
-    except Exception:
-        pass
-
-    # before/after outside range
+            read["frame"].setValue(str(first))
+    except Exception as e:
+        _log("video frame_mode: %s" % e)
+    for _pass in (0, 1):
+        try:
+            if "origfirst" in read.knobs():
+                read["origfirst"].setValue(first)
+            if "origlast" in read.knobs():
+                read["origlast"].setValue(last)
+            if "first" in read.knobs():
+                read["first"].setValue(first)
+            if "last" in read.knobs():
+                read["last"].setValue(last)
+        except Exception as e:
+            _log("video range knobs: %s" % e)
     try:
         if "before" in read.knobs():
             read["before"].setValue("hold")
@@ -3632,8 +3888,48 @@ def _apply_video_read_range(read, out_path):
             read["after"].setValue("hold")
     except Exception:
         pass
+    return first, last
 
-    # Format size from media (not project root)
+
+def _apply_video_read_range(read, out_path):
+    """
+    Read properties: frame 1 through the movie's last frame.
+    Also sets the script frame range to that span so Play runs the whole clip.
+    Range is applied after reload — reload would otherwise put the project range back.
+    """
+    # Reload so Nuke opens the container before we read its detected range.
+    try:
+        if "reload" in read.knobs():
+            read["reload"].execute()
+    except Exception:
+        pass
+
+    probe = _probe_video_media(out_path)
+    w = probe.get("width")
+    h = probe.get("height")
+    fps = probe.get("fps")
+    nuke_first, nuke_last = 1, 1
+    try:
+        if "origfirst" in read.knobs():
+            nuke_first = int(read["origfirst"].value())
+        if "origlast" in read.knobs():
+            nuke_last = int(read["origlast"].value())
+    except Exception:
+        nuke_first, nuke_last = 1, 1
+    root_first, root_last = 1, 1
+    try:
+        root_first = int(nuke.root()["first_frame"].value())
+        root_last = int(nuke.root()["last_frame"].value())
+    except Exception:
+        root_first, root_last = 1, 1
+
+    length = _clip_playback_length(
+        probe.get("frames"), nuke_first, nuke_last, root_first, root_last
+    )
+    first, last = 1, int(length)
+
+    # Format size from media (not project root) before the range, then reload
+    # once. The range is written again afterwards so it stays 1..end.
     if w and h and int(w) > 0 and int(h) > 0:
         try:
             fmt_name = "comfy_vid_%dx%d" % (int(w), int(h))
@@ -3668,12 +3964,24 @@ def _apply_video_read_range(read, out_path):
         except Exception:
             pass
 
-    # Second reload after range/format knobs
+    # Reload can put Nuke's auto range back (often the script range, or 1–1).
+    # Write 1..end after that, and again so the properties panel keeps it.
     try:
         if "reload" in read.knobs():
             read["reload"].execute()
     except Exception:
         pass
+
+    first, last = _set_read_playback_range(read, 1, last)
+    if last > 1:
+        try:
+            nuke.root()["first_frame"].setValue(1)
+            nuke.root()["last_frame"].setValue(int(last))
+            _log("Script frame range → 1–%s" % int(last))
+        except Exception as e:
+            _log("script frame range: %s" % e)
+        # Root range changes can refresh the Read. Put 1..end back.
+        first, last = _set_read_playback_range(read, 1, last)
 
     _log(
         "Video Read range %s–%s (%s frames) path=%s"
@@ -3997,6 +4305,7 @@ def show_panel(initial_prompt=None, workflow=None):
             self.out_dir = nuke.String_Knob("output_dir", "Output dir")
             self.out_dir.setValue(DEFAULT_OUT)
             self.project_code = nuke.String_Knob("project_code", "Project code")
+            self.project_code.setValue(_remembered_project_code())
             help_hires = (
                 "<b>Hi-res v04</b> on 192.168.91.12:8166.<br>"
                 "Plate → node <b>500</b>, mask_luma → <b>499</b>, prompt → <b>494</b>.<br>"
@@ -4610,6 +4919,7 @@ def show_image_gen_panel():
             self.out_dir = nuke.String_Knob("output_dir", "Output dir")
             self.out_dir.setValue(DEFAULT_OUT)
             self.project_code = nuke.String_Knob("project_code", "Project code")
+            self.project_code.setValue(_remembered_project_code())
             self.help_txt = nuke.Text_Knob(
                 "help_txt",
                 "",
@@ -4918,6 +5228,7 @@ def show_image_to_video_panel():
             self.out_dir = nuke.String_Knob("output_dir", "Output dir")
             self.out_dir.setValue(DEFAULT_OUT)
             self.project_code = nuke.String_Knob("project_code", "Project code")
+            self.project_code.setValue(_remembered_project_code())
             self.help_txt = nuke.Text_Knob(
                 "help_txt",
                 "",
@@ -5304,6 +5615,7 @@ def show_image_outpaint_panel():
             self.out_dir = nuke.String_Knob("output_dir", "Output dir")
             self.out_dir.setValue(DEFAULT_OUT)
             self.project_code = nuke.String_Knob("project_code", "Project code")
+            self.project_code.setValue(_remembered_project_code())
             self.help_txt = nuke.Text_Knob(
                 "help_txt",
                 "",
@@ -5377,6 +5689,7 @@ def show_image_description_panel():
                 )
             self.prompt.setValue(start_p)
             self.project_code = nuke.String_Knob("project_code", "Project code")
+            self.project_code.setValue(_remembered_project_code())
             self.help_txt = nuke.Text_Knob(
                 "help_txt",
                 "",
@@ -5403,6 +5716,300 @@ def show_image_description_panel():
     )
 
 
+def _movie_file_from_node(node):
+    """Return (path, read_node) when the selection is a movie Read, else (None, read)."""
+    read = None
+    try:
+        if node is not None and node.Class() == "Read":
+            read = node
+    except Exception:
+        read = None
+    if read is None:
+        read = find_upstream_read(node)
+    path = evaluate_read_path(read) if read is not None else None
+    ext = os.path.splitext(path or "")[1].lower()
+    if path and ext in _MOVIE_EXTS:
+        return path, read
+    return None, read
+
+
+def schedule_comp_depth(
+    node=None,
+    server=DEFAULT_SERVER,
+    workflow=None,
+    output_dir=DEFAULT_OUT,
+    project_code="",
+    load_id=None,
+    save_id=None,
+    label="Comp Depth",
+    stamp_key="depth",
+    client_prefix="nuke-comp",
+    default_workflow=None,
+):
+    """
+    Pix-Edit > Comp video-to-video.
+    Upload the selected Read's movie into VHS_LoadVideo (load_id).
+    SaveVideo (save_id) comes back as a new Read, frame range 1 through the end.
+    """
+    global _BG_JOB_ACTIVE, _POLL_STATE
+
+    if nuke is None:
+        raise RuntimeError("Must run inside Nuke")
+
+    ComfyClient, ComfyError = _get_client()
+
+    if node is None:
+        nodes = nuke.selectedNodes()
+        if not nodes:
+            nuke.message(
+                "Select a Read of a movie first (.mp4, .mov, .mkv, .webm, .avi)."
+            )
+            return
+        node = nodes[0]
+    if isinstance(node, str):
+        n = nuke.toNode(node)
+        if n is None:
+            nuke.message("Node gone: %s" % node)
+            return
+        node = n
+
+    movie_path, read = _movie_file_from_node(node)
+    if not movie_path:
+        shown = ""
+        try:
+            if read is not None:
+                shown = str(read["file"].value() or "")
+        except Exception:
+            shown = ""
+        nuke.message(
+            "%s needs a movie file on a Read.\n\n"
+            "Select the Read (or a node fed by that Read) whose file is "
+            ".mp4, .mov, .mkv, .webm, or .avi.\n"
+            "Image sequences are not uploaded.\n\n%s" % (label, shown)
+        )
+        return
+
+    if _BG_JOB_ACTIVE or ComfyClient.is_busy() or _POLL_STATE is not None:
+        nuke.message(
+            "A Comfy job is already running in this Nuke session. Wait for it."
+        )
+        return
+
+    load_id = str(load_id or COMP_DEPTH_LOAD)
+    save_id = str(save_id or COMP_DEPTH_SAVE)
+    wf_path = workflow or default_workflow or COMP_DEPTH_WORKFLOW
+    server = resolve_server_for_workflow(wf_path, fallback=server or DEFAULT_SERVER)
+    try:
+        wf_path = _refresh_workflow_from_server(wf_path)
+    except Exception as e:
+        if not os.path.isfile(wf_path):
+            nuke.message("Workflow not found / cannot refresh:\n%s\n%s" % (wf_path, e))
+            return
+        _log("%s — workflow refresh failed, trying local: %s" % (label, e))
+    if not os.path.isfile(wf_path):
+        nuke.message("Workflow not found:\n%s" % wf_path)
+        return
+
+    out_dir = output_dir or DEFAULT_OUT
+    gated = _apply_project_gate(wf_path, out_dir, project_code)
+    if gated is None:
+        return
+    project_code, out_dir = gated
+    os.makedirs(out_dir, exist_ok=True)
+
+    node_name = node.name()
+    frame = int(nuke.frame())
+    _BG_JOB_ACTIVE = True
+    try:
+        import time as _time
+        import socket as _socket
+        import copy
+
+        host = _socket.gethostname().replace(" ", "_")
+        stamp = "%s_%s_%s" % (
+            stamp_key,
+            _time.strftime("%Y%m%d_%H%M%S"),
+            uuid.uuid4().hex[:8],
+        )
+        client = ComfyClient(
+            server=server,
+            workflow_path=wf_path,
+            timeout_sec=3600.0,
+            poll_interval_sec=3.0,
+            client_id="%s-%s-%s" % (client_prefix, host, stamp),
+        )
+        client.project_code = project_code or ""
+        _log("%s — load workflow %s" % (label, wf_path))
+        client.load_workflow()
+        wf = copy.deepcopy(client._workflow_template)
+        if load_id not in wf or save_id not in wf:
+            raise ComfyError(
+                "%s graph is missing node %s (video in) or %s (video out)."
+                % (label, load_id, save_id)
+            )
+        size = os.path.getsize(movie_path)
+        _log("%s — uploading %s (%s bytes)" % (label, movie_path, size))
+        remote = client.upload_video(
+            movie_path,
+            remote_name="%s%s" % (stamp, os.path.splitext(movie_path)[1].lower()),
+        )
+        wf[load_id].setdefault("inputs", {})["video"] = remote
+        prefix = "video/%s" % stamp
+        wf[save_id].setdefault("inputs", {})["filename_prefix"] = prefix
+        client.id_save = save_id
+        client._last_filename_prefix = prefix
+        _log("%s — video node %s = %s" % (label, load_id, remote))
+        _log("Queueing %s…" % label)
+        prompt_id = client.queue_prompt(wf)
+        _log("prompt_id=%s" % prompt_id)
+    except Exception as e:
+        _BG_JOB_ACTIVE = False
+        _log("ERROR: %s" % e)
+        try:
+            nuke.message("ComfyUI %s error:\n%s" % (label, e))
+        except Exception:
+            pass
+        return
+
+    import time as _time
+
+    _POLL_STATE = {
+        "client": client,
+        "prompt_id": prompt_id,
+        "t0": _time.time(),
+        "timeout": 3600.0,
+        "out_dir": out_dir,
+        "node_name": node_name,
+        "frame": frame,
+        "seed": None,
+        "stamp": stamp,
+        "method": stamp_key,
+    }
+    _log("%s queued — keep working. A new Read appears when the video is back." % label)
+    _schedule_ms(3000, _poll_comfy_tick)
+
+
+def show_comp_depth_panel():
+    """Pix-Edit > Comp > DepthCrafter Depth. Movie Read in, depth video out."""
+    if nuke is None:
+        raise RuntimeError("Must run inside Nuke")
+
+    import nukescripts  # type: ignore
+
+    class CompDepthPanel(nukescripts.PythonPanel):
+        def __init__(self):
+            nukescripts.PythonPanel.__init__(self, "Comp — DepthCrafter Depth")
+            self.server = nuke.String_Knob("server", "Server")
+            self.workflow = nuke.File_Knob("workflow", "Workflow")
+            self.workflow.setValue(COMP_DEPTH_WORKFLOW)
+            self.server.setValue(
+                resolve_server_for_workflow(
+                    COMP_DEPTH_WORKFLOW, fallback=DEFAULT_SERVER
+                )
+            )
+            self.out_dir = nuke.String_Knob("output_dir", "Output dir")
+            self.out_dir.setValue(DEFAULT_OUT)
+            self.project_code = nuke.String_Knob("project_code", "Project code")
+            self.project_code.setValue(_remembered_project_code())
+            self.help_txt = nuke.Text_Knob(
+                "help_txt",
+                "",
+                "<b>Select a Read of a movie</b> (.mp4, .mov, .mkv, .webm, .avi).<br>"
+                "That file uploads to Load Video node <b>3</b>. "
+                "Save Video node <b>30</b> comes back as a new Read.<br>"
+                "Runs on <b>192.168.91.12:8166</b>. No prompt — depth only.",
+            )
+            for k in (
+                self.server,
+                self.workflow,
+                self.project_code,
+                self.out_dir,
+                self.help_txt,
+            ):
+                self.addKnob(k)
+
+    sel = nuke.selectedNodes()
+    node = sel[0] if sel else None
+    p = CompDepthPanel()
+    if not p.showModalDialog():
+        _log("Comp Depth cancelled")
+        return
+    if node is None:
+        sel = nuke.selectedNodes()
+        node = sel[0] if sel else None
+    schedule_comp_depth(
+        node=node,
+        server=p.server.value().strip(),
+        workflow=p.workflow.value(),
+        output_dir=p.out_dir.value() or DEFAULT_OUT,
+        project_code=p.project_code.value(),
+    )
+
+
+def show_comp_alpha_panel():
+    """Pix-Edit > Comp > Video Alpha Mate. Movie in node 9133, SaveVideo 9112."""
+    if nuke is None:
+        raise RuntimeError("Must run inside Nuke")
+
+    import nukescripts  # type: ignore
+
+    class CompAlphaPanel(nukescripts.PythonPanel):
+        def __init__(self):
+            nukescripts.PythonPanel.__init__(self, "Comp — Video Alpha Mate")
+            self.server = nuke.String_Knob("server", "Server")
+            self.workflow = nuke.File_Knob("workflow", "Workflow")
+            self.workflow.setValue(COMP_ALPHA_WORKFLOW)
+            self.server.setValue(
+                resolve_server_for_workflow(
+                    COMP_ALPHA_WORKFLOW, fallback=DEFAULT_SERVER
+                )
+            )
+            self.out_dir = nuke.String_Knob("output_dir", "Output dir")
+            self.out_dir.setValue(DEFAULT_OUT)
+            self.project_code = nuke.String_Knob("project_code", "Project code")
+            self.project_code.setValue(_remembered_project_code())
+            self.help_txt = nuke.Text_Knob(
+                "help_txt",
+                "",
+                "<b>Select a Read of a movie</b> (.mp4, .mov, .mkv, .webm, .avi).<br>"
+                "That file uploads to Load Video node <b>9133</b>. "
+                "Save Video node <b>9112</b> comes back as a new Read, "
+                "frame range <b>1</b> through the last frame.<br>"
+                "Runs on <b>192.168.91.12:8166</b>.",
+            )
+            for k in (
+                self.server,
+                self.workflow,
+                self.project_code,
+                self.out_dir,
+                self.help_txt,
+            ):
+                self.addKnob(k)
+
+    sel = nuke.selectedNodes()
+    node = sel[0] if sel else None
+    p = CompAlphaPanel()
+    if not p.showModalDialog():
+        _log("Video Alpha Mate cancelled")
+        return
+    if node is None:
+        sel = nuke.selectedNodes()
+        node = sel[0] if sel else None
+    schedule_comp_depth(
+        node=node,
+        server=p.server.value().strip(),
+        workflow=p.workflow.value(),
+        output_dir=p.out_dir.value() or DEFAULT_OUT,
+        project_code=p.project_code.value(),
+        load_id=COMP_ALPHA_LOAD,
+        save_id=COMP_ALPHA_SAVE,
+        label="Video Alpha Mate",
+        stamp_key="alpha",
+        client_prefix="nuke-alpha",
+        default_workflow=COMP_ALPHA_WORKFLOW,
+    )
+
+
 def register_menu():
     if nuke is None:
         return
@@ -5421,11 +6028,14 @@ def register_menu():
     m.addCommand("Image Outpaint...", show_image_outpaint_panel)
     m.addCommand("Image Description...", show_image_description_panel)
     m.addCommand("Image to Video...", show_image_to_video_panel)
+    comp = m.addMenu("Comp")
+    comp.addCommand("DepthCrafter Depth...", show_comp_depth_panel)
+    comp.addCommand("Video Alpha Mate...", show_comp_alpha_panel)
     m.addCommand("Ping Server", ping_server)
     m.addCommand("Prompt Examples...", show_prompt_examples_panel)
 
     nuke.tprint(
-        "[Pix-Edit] Menu OK — Edit / Hi-res / Ref Hi-res / Gen / Outpaint / Describe / I2V / Ping | "
+        "[Pix-Edit] Menu OK — Edit / Hi-res / Ref Hi-res / Gen / Outpaint / Describe / I2V / Comp / Ping | "
         "server=%s root=%s workflow=%s"
         % (DEFAULT_SERVER, REPO_ROOT, os.path.basename(DEFAULT_WORKFLOW))
     )

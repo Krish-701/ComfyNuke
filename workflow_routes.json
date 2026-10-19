@@ -78,6 +78,16 @@
       "file": "Image_Description_v01.json",
       "server_id": "8177",
       "notes": "Ollama describe: user text node 4, LoadImage 5, PreviewAny 12"
+    },
+    {
+      "file": "DepthCrafter_Depth_V02.json",
+      "server_id": "8166-12",
+      "notes": "Comp DepthCrafter: upload video node 3, SaveVideo node 30 on 192.168.91.12:8166"
+    },
+    {
+      "file": "LTX_2.5-Alpha-Mate_V01.json",
+      "server_id": "8166-12",
+      "notes": "Comp Video Alpha Mate: upload video node 9133, SaveVideo node 9112 on 192.168.91.12:8166"
     }
   ]
 }

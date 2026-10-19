@@ -31,6 +31,8 @@ KNOWN_WORKFLOWS = (
     "Image_outpaint_v01.json",
     "Image_Description_v01.json",
     "video_minimax_h3_i2v.json",
+    "DepthCrafter_Depth_V02.json",
+    "LTX_2.5-Alpha-Mate_V01.json",
 )
 
 
@@ -214,6 +216,15 @@ def discover_workflow_files(root: Path) -> List[str]:
         for folder in folders:
             if folder.is_dir():
                 paths.extend(sorted(folder.glob("*.json")))
+        wf_root = root / "Workflows"
+        if wf_root.is_dir():
+            paths.extend(sorted(wf_root.glob("*/*.json")))
+        for name in list(KNOWN_WORKFLOWS):
+            if name in seen:
+                continue
+            if wf_root.is_dir() and any(wf_root.glob("*/" + name)):
+                names.append(name)
+                seen.add(name)
         for p in paths:
             if p.name in ("studio_config.json", "studio_config.example.json", "workflow_routes.json"):
                 continue

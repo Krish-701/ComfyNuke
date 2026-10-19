@@ -73,6 +73,10 @@ def _nuke_tool_from_filename(name: str) -> str:
         return "Image Outpaint"
     if "upscale" in b:
         return "Image Upscale"
+    if "depthcrafter" in b or "depth_crafter" in b:
+        return "Comp Depth"
+    if "alpha_mate" in b or "alphamate" in b or "alpha-mate" in b:
+        return "Video Alpha Mate"
     if "video" in b or "i2v" in b or "minimax" in b:
         return "Image to Video"
     return ""
@@ -676,6 +680,80 @@ class ComfyClient:
             data=body,
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
             timeout=120,
+        )
+        result = json.loads(raw.decode("utf-8"))
+        name = result.get("name") or remote_name
+        sub = result.get("subfolder") or ""
+        if sub:
+            return f"{sub}/{name}".replace("\\", "/")
+        return name
+
+    def upload_video(
+        self,
+        video_path: str,
+        overwrite: bool = True,
+        remote_name: Optional[str] = None,
+    ) -> str:
+        """Upload a movie into ComfyUI input/. Keeps .mp4/.mov (upload_image forces .png)."""
+        video_path = os.path.abspath(video_path)
+        if not os.path.isfile(video_path):
+            raise ComfyError(f"Video not found: {video_path}")
+        ext = Path(video_path).suffix.lower()
+        allowed = {
+            ".mp4",
+            ".mov",
+            ".webm",
+            ".mkv",
+            ".avi",
+            ".m4v",
+            ".mpg",
+            ".mpeg",
+            ".gif",
+        }
+        if ext not in allowed:
+            raise ComfyError(
+                "Video upload needs a movie file (%s). Got: %s"
+                % (", ".join(sorted(allowed)), ext or "(no extension)")
+            )
+        mime = {
+            ".mp4": "video/mp4",
+            ".mov": "video/quicktime",
+            ".webm": "video/webm",
+            ".mkv": "video/x-matroska",
+            ".avi": "video/x-msvideo",
+            ".m4v": "video/mp4",
+            ".mpg": "video/mpeg",
+            ".mpeg": "video/mpeg",
+            ".gif": "image/gif",
+        }.get(ext, "application/octet-stream")
+        if not remote_name:
+            host = socket.gethostname().replace(" ", "_")
+            remote_name = "nuke_%s_depth_%s%s" % (
+                host,
+                uuid.uuid4().hex[:10],
+                ext,
+            )
+        elif not Path(remote_name).suffix:
+            remote_name = remote_name + ext
+        with open(video_path, "rb") as f:
+            file_bytes = f.read()
+        boundary = f"----ComfyNuke{uuid.uuid4().hex}"
+        body = self._multipart(
+            boundary,
+            fields={
+                "overwrite": "true" if overwrite else "false",
+                "type": "input",
+            },
+            files={
+                "image": (remote_name, file_bytes, mime),
+            },
+        )
+        raw = self._request(
+            "POST",
+            "/upload/image",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            timeout=600,
         )
         result = json.loads(raw.decode("utf-8"))
         name = result.get("name") or remote_name
