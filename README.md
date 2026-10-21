@@ -1,42 +1,42 @@
 # ComfyNuke
 
-Nuke artists talk to a **secure Ubuntu hub**:
+Nuke artists talk to a **secure Ubuntu hub** at `192.168.91.11`. They use HTTP only (no Samba, no SSH).
+
+**Agent handoff (menus, node IDs, routes, project codes, how to add a workflow):** [PLAYBOOK.md](PLAYBOOK.md).
 
 | Port | Role |
 |------|------|
-| **8188** | ComfyUI (generate / edit / i2v) |
-| **8600** | Read-only **code** server (scripts + workflows) |
-
-No Samba/SSH needed for artists — only those two HTTP ports.
+| **8600** | Code server, admin, and the ComfyUI proxy artists actually call |
+| **8166 / 8177 / 8188** | ComfyUI on this hub. Artists do not point Nuke at these directly |
+| **192.168.91.12:8166** | Hi-res, Outpaint, and Comp (route id `8166-12`) |
 
 ## Artist — single paste (Nuke Script Editor)
 
 ```python
-exec(__import__('urllib.request').request.urlopen('http://192.168.91.13:8600/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
+exec(__import__('urllib.request').request.urlopen('http://192.168.91.11:8600/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
 ```
 
-Menu: **Nuke → Pix-Edit** → Edit Image | Image Gen | Image to Video | Ping Server
+Menu: **Nuke → Pix-Edit** — Edit Image, Hi-res, Ref Hi-res, Image Gen, Image Outpaint, Image Description, Image to Video, **Comp** (DepthCrafter Depth, Video Alpha Mate), Ping Server.
 
 ## Ubuntu hub
 
 Repo path example:
 
-`/home/radhakrishnan/Comfyui-Setup/ComfyNuke`
+`/home/radhakrishnan/ComfyUI-Setup/ComfyNuke`
 
 ```bash
-cd /home/radhakrishnan/Comfyui-Setup/ComfyNuke
+cd /home/radhakrishnan/ComfyUI-Setup/ComfyNuke
 git pull
-cp -n studio_config.example.json studio_config.json
 
-# Terminal 1 — ComfyUI (your usual command), port 8188
-# Terminal 2 — code distribution:
-python3 server/serve_code.py --root /home/radhakrishnan/Comfyui-Setup/ComfyNuke --host 0.0.0.0 --port 8600
-# or: ./server/start_code_server.sh
+# Code server (the live process is this command, not systemd):
+python3 server/serve_code.py --root /home/radhakrishnan/ComfyUI-Setup/ComfyNuke --host 0.0.0.0 --port 8600
 ```
 
 Firewall: allow LAN **8188** + **8600**.
 
-**How to start, stop, and use the studio:** [docs/STUDIO_PLAYBOOK.md](docs/STUDIO_PLAYBOOK.md)
+**How the tool works and how to extend it:** [PLAYBOOK.md](PLAYBOOK.md).
+
+Start/stop and GPU notes (some menu rows there are older than the playbook): [docs/STUDIO_PLAYBOOK.md](docs/STUDIO_PLAYBOOK.md)
 
 Also: [docs/MULTI_USER_UBUNTU.md](docs/MULTI_USER_UBUNTU.md) · [docs/STUDIO_OPERATIONS.md](docs/STUDIO_OPERATIONS.md)
 
@@ -44,9 +44,9 @@ Also: [docs/MULTI_USER_UBUNTU.md](docs/MULTI_USER_UBUNTU.md) · [docs/STUDIO_OPE
 
 | Menu | Workflow file |
 |------|----------------|
-| Edit Image | `Edit_Image_v08.json` (plate `80`, mask `123`, prompt `109.value`) |
-| Image Gen | `Image_generation_v01.json` |
-| Image to Video | `video_minimax_h3_i2v.json` |
+| Edit Image | `Workflows/Edit_Image_v08.json` (plate `80`, mask `123`, prompt `109.value`) |
+| Image Gen | `Workflows/Image_generation_v01.json` |
+| Comp | `Workflows/Comp/` — DepthCrafter and Video Alpha Mate. Full table in [PLAYBOOK.md](PLAYBOOK.md) |
 
 ## Layout
 
@@ -60,8 +60,6 @@ Also: [docs/MULTI_USER_UBUNTU.md](docs/MULTI_USER_UBUNTU.md) · [docs/STUDIO_OPE
 | `client/comfy_client.py` | ComfyUI HTTP client |
 | `studio_config.example.json` | Server URLs template |
 
-## Local dev (optional)
+## Local dev
 
-```python
-exec(open(r"D:/AI-Dev/Krish-ComfyNuke/nuke/load_in_nuke.py", encoding="utf-8").read())
-```
+Artists do not load the repo from a Windows path. They run the one-liner above. Agents working on this hub edit `/home/radhakrishnan/ComfyUI-Setup/ComfyNuke` and follow [PLAYBOOK.md](PLAYBOOK.md).

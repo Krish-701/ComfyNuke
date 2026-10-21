@@ -85,9 +85,9 @@
       "notes": "Comp DepthCrafter: upload video node 3, SaveVideo node 30 on 192.168.91.12:8166"
     },
     {
-      "file": "LTX_2.5-Alpha-Mate_V01.json",
+      "file": "LTX_2.5_Alpha_Mate_V02.json",
       "server_id": "8166-12",
-      "notes": "Comp Video Alpha Mate: upload video node 9133, SaveVideo node 9112 on 192.168.91.12:8166"
+      "notes": "Comp Video Alpha Mate V02: upload video node 9133, SaveVideo node 9112, VAE Decode 9107 (no tiling) on 192.168.91.12:8166"
     }
   ]
 }

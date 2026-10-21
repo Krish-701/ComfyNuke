@@ -1,451 +1,251 @@
-# PLAYBOOK — Krish-ComfyNuke (Nuke ↔ ComfyUI)
+# ComfyNuke playbook
 
-**Studio operators (start/stop/admin UI, Hi-res, Description, usage logs):** see **[docs/STUDIO_PLAYBOOK.md](docs/STUDIO_PLAYBOOK.md)** — that file is the live hub (`192.168.91.11`) source of truth as of **2026-09-04**.
+Handoff for the next person or agent. Written **2026-10-20** against `main` commit `eb0ca15` on https://github.com/Krish-701/ComfyNuke.
 
-This document is the older Windows-dev handoff. Paths like `D:\AI-Dev\Krish-ComfyNuke` and default `:8188` on `192.168.91.13` are **stale** for the studio. Use the Ubuntu repo `/home/radhakrishnan/ComfyUI-Setup/ComfyNuke` and `:8600` bootstrap.
+If this file and the code disagree, trust the code and the workflow JSON on disk. Then update this file.
 
-### Studio current (2026-09-04) — do not ignore
-
-| Mode | Menu | Workflow | Server | Inject |
-|------|------|----------|--------|--------|
-| Edit Image | Pix-Edit → Edit Image... | `Edit_Image_v08.json` | hub `:8166` via `:8600/comfyui-r/8166` | plate `80`, mask `123`, prompt `109.value` |
-| Edit Image Hi-res | Pix-Edit → Edit Image Hi-res... | `Edit_Image_Hi_res_v03.json` (alias `Edit_Image_Hi_res.json`) | `192.168.91.12:8166` via `:8600/comfyui-r/8166-12` | plate `164`, mask `167`, prompt `161.value`. If down: popup only, use Edit Image. |
-| Image Gen | Pix-Edit → Image Gen... | `Image_generation_v01.json` | hub `:8177` | prompt `73.value` |
-| Image Description | Pix-Edit → Image Description... | `Image_Description_v01.json` | hub `:8177` | text `4`, LoadImage `5`, PreviewAny `12` |
-| Image to Video | Pix-Edit → Image to Video... | `video_minimax_h3_i2v.json` | (node may still be missing on backends) | LoadImage `114`, prompt `141.value` |
-
-Artist one-liner: `nuke/artist_one_liner.txt` → `http://192.168.91.11:8600/nuke/remote_bootstrap.py`.
-
-- MOV/EXR sequences: write **current frame** PNG, then upload.
-- Description: if **Crop** is selected, only cropped pixels are described.
-- Bootstrap 403 on `Edit_Image_Hi_res_v01.json`: restart `:8600` allow-list; v01 is optional so pull must not abort.
-- Admin usage logs: From/To **date** pickers + presets (Today / 7d / 30d / month).
-
-Handoff for an autonomous agent that will run commands and edit files.
-Labels: **[VERIFIED]** observed in this workspace/code/runtime · **[INFERRED]** follows from code/evidence, not end-to-end retested here · **[ASSUMED]** no proof — verify before acting · **GAP** unknown, do not invent.
+Older docs (`docs/STUDIO_PLAYBOOK.md`, `README.md` history, anything that says `192.168.91.13` or `D:\AI-Dev\Krish-ComfyNuke`) are stale. This hub is **`192.168.91.11`**.
 
 ---
 
-## 0. Read First
+## 0. What this tool is
 
-1. **Do not change the default Comfy server URL, force-push, delete `client/out` results the user may still need, or queue jobs on `http://192.168.91.13:8188` without human approval** if the human is not present — that host is a shared Linux ComfyUI box. [VERIFIED] server default is `http://192.168.91.13:8188` in `nuke/ComfyEdit.py` and `client/comfy_client.py`.
-2. **Before any edit**, from a shell on this machine:
-   ```bat
-   cd /d D:\AI-Dev\Krish-ComfyNuke
-   python --version
-   python -c "from client.comfy_client import ComfyClient; c=ComfyClient(workflow_path=r'D:\AI-Dev\Krish-ComfyNuke\video_minimax_h3_i2v.json'); c.load_workflow(); print(c.id_load, c.id_prompt, c.id_prompt_key)"
-   ```
-   Expected inject for i2v: `114 141 value`. [VERIFIED] 2026-08-05 on this machine with Python 3.12.4.
-3. **Never reintroduce Python worker threads + `nuke.executeInMainThread` for Comfy polling.** Polling is main-thread `QTimer` only (`_poll_comfy_tick` in `nuke/ComfyEdit.py`). Threads caused Nuke crashes (see §5). [INFERRED] from code comments + conversation history; crash not re-reproduced in this handoff session.
-4. **Never inject artist prompt into LLM system PrimitiveStringMultiline** (edit: system is separate from user node `289`; i2v: system is node `140`, user is `141`). Auto-discovery uses `user_prompt_input` → linked primitive. [VERIFIED] discovery returns `141`/`value` for i2v and `289`/`value` for edit.
-5. **If reality contradicts this doc** (different server, missing workflow nodes, different prompt IDs): stop, re-run discovery with `ComfyClient.load_workflow()` on the actual JSON on disk, and ask a human before rewriting inject IDs or changing production server.
-6. **Stop and ask a human** before: changing Comfy models/paths on the Linux server; deleting workflows; amending git history; force-push; spending GPU time with long MiniMax i2v runs if the queue is shared.
-7. **Nuke UI work must be validated inside Nuke.** Shell tests only cover `comfy_client` inject/HTTP, not Write/Roto/Read.
+ComfyNuke lets Nuke artists run ComfyUI graphs without Samba or SSH.
+
+Artists paste one line into the Nuke Script Editor. That downloads `nuke/remote_bootstrap.py` from the hub, syncs scripts and workflow JSON into `~/.comfynuke/cache` on the artist machine, and registers the **Nuke → Pix-Edit** menu.
+
+Jobs do not talk to ComfyUI directly. They go through the hub on port **8600**, which checks the artist IP, optionally requires a project code, proxies `/prompt` to the right GPU box, and writes a usage log.
+
+```
+Nuke (Windows)
+  GET  http://192.168.91.11:8600/nuke/remote_bootstrap.py
+  GET  scripts + Workflows/*.json + workflow_routes.json
+  POST http://192.168.91.11:8600/comfyui-r/<server_id>/prompt
+        → 127.0.0.1:8166          Edit Image
+        → 127.0.0.1:8177          Image Gen, Image Description
+        → 192.168.91.12:8166      Hi-res, Ref Hi-res, Outpaint, Comp
+        → 127.0.0.1:8188          default /comfyui only
+```
+
+Repo on the hub: `/home/radhakrishnan/ComfyUI-Setup/ComfyNuke`.
 
 ---
 
-## 1. Purpose and Current State
+## 1. Rules before you change anything
 
-### Purpose
-Multi-artist **Nuke (Windows)** talks to **ComfyUI (Linux, default `http://192.168.91.13:8188`)** for three modes:
-
-| Mode | Menu | Workflow file | Inject summary |
-|------|------|---------------|----------------|
-| Edit Image | Pix-Edit → Edit Image... | `D:\AI-Dev\Krish-ComfyNuke\Edit_Image_v08.json` | plate LoadImage `80`, mask LoadImage `123`, prompt `109.value`, SaveImage `121` |
-| Image Gen (txt2img) | ComfyUI → Image Gen... | `D:\AI-Dev\Krish-ComfyNuke\Image_generation_v01.json` | no LoadImage, prompt `73.value`, SaveImage `29` |
-| Image to Video | ComfyUI → Image to Video... | `D:\AI-Dev\Krish-ComfyNuke\video_minimax_h3_i2v.json` | LoadImage `114`, user prompt `141.value`, RandomNoise seed `132.noise_seed`, SaveVideo `92` |
-
-[VERIFIED] node IDs via `ComfyClient.load_workflow()` on this disk 2026-08-05.
-
-Jobs are **sequential per Nuke session** (`_BG_JOB_ACTIVE` + client job lock). Export PNG → upload → `/prompt` → history poll → download → new Nuke `Read` named `ComfyEdit_Result_###`. Progress in Script Editor log; popup when done.
-
-### Done (code present; confidence mixed)
-- **Edit Image path** (Roto mask or full-frame Read): implemented in `nuke/ComfyEdit.py`. [ASSUMED] still works end-to-end unless workflows/server models moved; not re-run against live Comfy in this handoff session.
-- **Image Gen path**: implemented; [ASSUMED] live OK if server has that workflow’s models.
-- **Image to Video path**: implemented; user reported **video return working**. [VERIFIED] local out files exist e.g. `D:\AI-Dev\Krish-ComfyNuke\client\out\comfy_i2v_20260805_172952_90fec0ad.mp4` and `last_comfy_result.mp4`.
-- **SaveVideo support in `build_prompt`**: without this, i2v failed with `Workflow has no SaveImage / stitch / preview image source`. [VERIFIED] fixed; post-fix build sets `id_save=92`, no fake SaveImage.
-- **Video Read frame range + format**: `_probe_video_media` + `_apply_video_read_range` so Read is not 1-frame hold. [VERIFIED] probe on sample mp4 returned `width=1376 height=768 fps=24.0 frames=124` via OpenCV (ffprobe not on PATH). [INFERRED] Nuke Read knobs set correctly when that path runs inside Nuke; full Nuke retest not done in this handoff write.
-- **Menu trimmed**: only Edit Image / Image Gen / Image to Video / Ping Server (no “Run … on selected” shortcuts). [VERIFIED] `register_menu` in current `ComfyEdit.py`.
-
-### Half-done / stale
-- `nuke/load_in_nuke.py` banner still prints only “Edit Image + Image Gen” and omits i2v menu lines. [VERIFIED] file content. Loader still works; message is outdated.
-- `docs/PHASE1_NUKE.md` documents Phase 1 edit focus; may lag i2v/menu. Prefer this PLAYBOOK + source.
-
-### Untouched (do not invent status)
-- GAP: multi-artist queue fairness beyond “one job per Nuke session + Comfy server queue”.
-- GAP: permanent install in every artist’s `~/.nuke/menu.py` (snippet exists; who installed what unknown).
-- GAP: ComfyUI custom node / model versions on `192.168.91.13`.
-- Nukomfy Suite under `ComfyUI-Nukomfy-Suite/` is a separate package in-repo; **not** the Nuke menu path used by `ComfyEdit.py`. [VERIFIED] separate tree; integration status not claimed.
-
-### Resume point
-If continuing development: **stabilize video Read in Nuke** (confirm `first`/`last`/`format` after live i2v), then refresh `load_in_nuke.py` print strings. No open code compile failures known for the SaveVideo inject path.
+1. Artists only use HTTP. Do not add Samba, SSH, or a file share as the way they get code.
+2. Do not invent node IDs. Open the workflow JSON and confirm `class_type` and the input key (`image`, `video`, `value`).
+3. Do not send Edit Image to `:8188`. `Edit_Image_v08.json` needs WAS Node Suite, which is on this hub’s `:8166`. A missing node fails the whole graph.
+4. Do not point Nuke at raw `:8166`, `:8177`, or `:8188`. Jobs stay on `:8600/comfyui-r/<id>` so the IP gate and project-code check run.
+5. Poll inside Nuke on the main thread with `QTimer` (`_poll_comfy_tick`). Do not add Python worker threads plus `nuke.executeInMainThread`. That crashed Nuke.
+6. `upload_image()` in `client/comfy_client.py` forces unknown extensions to `.png`. Movies must use `upload_video()`, which keeps `.mp4` / `.mov` / `.mkv` / `.webm` / `.avi`.
+7. Do not commit `studio_config.json`, `server/access_control.json`, `server/project_codes.json`, `server/usage_logs.jsonl`, `.grok/`, `.forbidden`, or `temp-old/`.
+8. Do not store a GitHub token in the repo, the git remote, or a commit. If someone pastes a PAT, use it once for that push and tell them to revoke it.
+9. Do not tick a workflow as “requires a project code” unless a human asks. `require_workflows` starts empty so artists are not blocked.
+10. Do not `kill -9` CUDA or ComfyUI processes. SIGTERM only. Do not restart ComfyUI just because the code server changed.
+11. Do not move live graphs out of `Workflows/`. Nested Comp graphs stay in `Workflows/Comp/`.
+12. Nuke UI changes are not proven until an artist reloads the script and runs the menu. Shell checks do not open Nuke.
 
 ---
 
-## 2. Setup and Orientation
+## 2. Where the code lives
 
-### Environment
-| Item | Value | Label |
-|------|--------|--------|
-| Workspace | `D:\AI-Dev\Krish-ComfyNuke` | [VERIFIED] |
-| OS (dev machine) | Windows (PowerShell/cmd) | [VERIFIED] user_info |
-| Python (shell) | 3.12.4 | [VERIFIED] `python --version` |
-| Nuke Python | GAP: exact Nuke version not recorded in this session | |
-| Comfy server default | `http://192.168.91.13:8188` | [VERIFIED] code |
-| Credentials | None in repo for Comfy HTTP API (open LAN assumed) | [ASSUMED] no auth headers in client |
-| Secrets | N/A in code for Comfy | — |
+| Path | Role |
+|------|------|
+| `nuke/ComfyEdit.py` | Pix-Edit menu, export, project-code memory, queue, poll, result Read |
+| `nuke/remote_bootstrap.py` | What artists execute. Sync list must match `SYNC_FILES` |
+| `nuke/artist_one_liner.txt` | Paste into Nuke |
+| `client/comfy_client.py` | Upload, build prompt, queue, download |
+| `server/serve_code.py` | Hub HTTP `:8600`: files, IP gate, proxy, admin, project-code enforcement |
+| `server/admin_ui.html` | Admin page. Read from disk each request (`Cache-Control: no-store`) |
+| `server/project_codes.py` | Project codes, groups, which workflows require a code |
+| `server/access_control.py` | Machines, roles, `skip_project_code` (R&D) |
+| `server/usage_log.py` | Who ran which Nuke tool, project, iteration |
+| `server/workflow_routes.py` | Load/save routes; discover workflow JSON for the admin tick list |
+| `workflow_routes.json` | Live route table. Nuke reads it through `/api/comfy-routes` |
+| `Workflows/` | Live graphs artists sync. Flat files plus `Workflows/Comp/` |
+| `studio_config.json` | Gitignored local fallback. Prefer the live routes file |
 
-### Key paths
-| Role | Full path |
-|------|-----------|
-| Nuke UI + export | `D:\AI-Dev\Krish-ComfyNuke\nuke\ComfyEdit.py` |
-| Reload entry | `D:\AI-Dev\Krish-ComfyNuke\nuke\load_in_nuke.py` |
-| Permanent menu snippet | `D:\AI-Dev\Krish-ComfyNuke\nuke\menu_snippet.py` |
-| HTTP client | `D:\AI-Dev\Krish-ComfyNuke\client\comfy_client.py` |
-| Config example | `D:\AI-Dev\Krish-ComfyNuke\client\config.example.json` |
-| Download dir | `D:\AI-Dev\Krish-ComfyNuke\client\out\` |
-| Edit workflow | `D:\AI-Dev\Krish-ComfyNuke\Edit_Image_v08.json` |
-| Gen workflow | `D:\AI-Dev\Krish-ComfyNuke\Image_generation_v01.json` |
-| I2V workflow | `D:\AI-Dev\Krish-ComfyNuke\video_minimax_h3_i2v.json` |
-| Nuke temp exports | `%TEMP%\comfy_nuke\` e.g. `C:\Users\[REPLACE: windows user]\AppData\Local\Temp\comfy_nuke\` — files: `plate_srgb.png`, `input_rgba.png`, `mask_luma.png`, `i2v_frame.png`, … |
-
-### Practical lookup
-- Change default server: `DEFAULT_SERVER` in `nuke/ComfyEdit.py` **and** `ComfyClient.__init__` default / CLI in `client/comfy_client.py`.
-- Change default workflows: `DEFAULT_WORKFLOW`, `IMAGE_GEN_WORKFLOW`, `I2V_WORKFLOW` at top of `ComfyEdit.py`.
-- Grep inject discovery: `def _find_user_prompt_inject` and `def build_prompt` in `client/comfy_client.py`.
-- Grep poll: `def _poll_comfy_tick` in `nuke/ComfyEdit.py`.
-- Grep video Read: `def _probe_video_media`, `def _apply_video_read_range`, `def _create_result_read` in `nuke/ComfyEdit.py`.
-- Logs: Nuke Script Editor (`nuke.tprint` / `_log`); no dedicated log file. Client CLI prints to stdout.
-- Docs: `D:\AI-Dev\Krish-ComfyNuke\docs\PHASE1_NUKE.md`, `docs\NUKOMFY_REFERENCE.md`.
-
-### Dependencies (runtime)
-- Nuke with PySide2 or PySide6 for `QTimer`. [VERIFIED] `_qt_timer` tries both.
-- Network to Comfy `/prompt`, `/history/{id}`, `/view`, `/upload/image`.
-- Pillow for alpha invert on edit path. [INFERRED] used in `_invert_png_alpha_pil`.
-- Optional: OpenCV (`cv2`) for video probe when `ffprobe` missing. [VERIFIED] probe used OpenCV successfully; ffprobe raised `WinError 2` (not found).
-- Comfy custom nodes for workflows (LLM, MiniMaxH3ImageToVideo, Smart crop, etc.) — **must exist on server**. Versions GAP.
-
-### Load into Nuke (exact)
-```python
-exec(open(r"D:/AI-Dev/Krish-ComfyNuke/nuke/load_in_nuke.py", encoding="utf-8").read())
-```
-[VERIFIED] path in `load_in_nuke.py` docstring and `ComfyEdit.py` header.
-
-**Wrong** (documented failure):
-```python
-exec(open(r"D:/AI-Dev/Krish-ComfyNuke/nuke/ComfyEdit.py").read())
-```
-Causes `NameError: name 'ComfyEdit' is not defined` for module-style use. [VERIFIED] `docs/PHASE1_NUKE.md`.
+Artist cache after bootstrap: `~/.comfynuke/cache/` on that Nuke machine. Remembered project code: `~/.comfynuke/project_code.json` (`code`, `left`). That file never goes to the hub.
 
 ---
 
-## 3. Problem and Root Cause
+## 3. Hub process
 
-Multiple historical issues. Most important for **current** i2v:
+Admin: http://192.168.91.11:8600/admin
 
-### A. Image-to-video queue failed without SaveImage
-- **Symptom:** I2V export/upload OK, then error when building prompt.
-- **Exact error:** `Workflow has no SaveImage / stitch / preview image source` (`ComfyError` from `build_prompt`).
-- **Reproduce (clean shell, no Nuke):**
-  ```bat
-  cd /d D:\AI-Dev\Krish-ComfyNuke
-  python -c "from client.comfy_client import ComfyClient; c=ComfyClient(workflow_path='video_minimax_h3_i2v.json'); c.load_workflow(); c.build_prompt(image_name='t.png', prompt='x', seed=1)"
-  ```
-  **Before fix:** that error. **After fix:** succeeds; SaveVideo `92` `filename_prefix` like `video/i2v_t`. [VERIFIED] after-fix run 2026-08-05.
-- **Root cause:** `build_prompt` required `SaveImage` or stitch/preview image source. `video_minimax_h3_i2v.json` has only `SaveVideo` (`92`) + `CreateVideo` (`133`), no `SaveImage`.
-- **Proof:** workflow JSON node `92` `class_type` `SaveVideo`; discovery listed savers `[('92', 'SaveVideo'), ('133', 'CreateVideo')]`.
+Health: `curl -sS http://127.0.0.1:8600/health` → `ComfyNuke code server OK`.
 
-### B. Returned video Read stuck on 1 frame / wrong format
-- **Symptom (user):** video downloads but Read holds one frame (`first`/`last` effectively single-frame hold); dimensions not matching video.
-- **Root cause (code-level):** stills path pins `first=last=current_frame`. Early video path only logged “let Nuke detect” without forcing multi-frame range/format after reload. [VERIFIED] prior code structure; user confirmation that return worked but range wrong.
-- **Mitigation added:** `_probe_video_media` + `_apply_video_read_range` sets `first`/`last`/`orig*` and `nuke.addFormat` + `read['format']`. [VERIFIED] code + OpenCV probe numbers on sample mp4.
+The systemd unit `comfynuke-code.service` is **inactive**. The process that is actually serving `:8600` is a manual `nohup`:
 
-### C. Edit-path historical issues (context for traps)
-| Symptom | Cause (as encoded in code/docs) | Label |
-|---------|----------------------------------|--------|
-| EXR full-frame alpha treated as mask | Prefer EXR outputs; full-frame A=255 treated carefully; mask via mask_luma | [INFERRED] comments/history |
-| Nuke crash | Qt invert / Python threads + main-thread callbacks | [INFERRED] comments in `ComfyEdit.py` |
-| Wrong load `exec(ComfyEdit.py)` | Module not registered as `ComfyEdit` | [VERIFIED] PHASE1 doc |
-| Image gen missing LoadImage 278 | txt2img has no LoadImage; client must allow `id_load=None` | [VERIFIED] discovery `load None` for gen |
+```bash
+/usr/bin/python3 server/serve_code.py \
+  --root /home/radhakrishnan/ComfyUI-Setup/ComfyNuke \
+  --host 0.0.0.0 --port 8600
+```
 
-### D. Prompt inject for i2v
-- User requirement: node **141** `PrimitiveStringMultiline` `value` for artist prompt; current frame to **114**.
-- [VERIFIED] auto-discovery hits `141`/`value` via LLM `user_prompt_input`; system prompt stays on `140`.
+Log: `/tmp/comfynuke-code-8600.log`.
+
+Restart only this process, and only after a Python change on the hub (`serve_code.py`, `project_codes.py`, `usage_log.py`, `workflow_routes.py`, `access_control.py`). Find the pid with `ps -ef | grep serve_code.py`. SIGTERM that pid. Start the same command with `nohup` again. Confirm `/health` and that an in-flight artist request still returns 200.
+
+These are read from disk and do **not** need a restart:
+
+- `server/admin_ui.html`
+- `workflow_routes.json`
+- workflow JSON under `Workflows/`
+- `nuke/ComfyEdit.py` and `nuke/remote_bootstrap.py` (artists download them on the next Nuke launch)
+
+`SYNC_FILES` inside `serve_code.py` is in memory. A new sync path is invisible to `/manifest.json` until the code server restarts. The nested file is still downloadable before that restart if the URL is under `Workflows/` (`ALLOWED_PREFIXES`).
+
+Do not start `:8188` with `start-comfyui-production.sh`. That script can SIGTERM the existing `:8177` process. Port details and GPU warnings are in `docs/STUDIO_PLAYBOOK.md` §2. Treat that file as ops notes, not as the menu or node-ID list.
+
+| Port | What |
+|------|------|
+| **8600** | This repo’s code server and proxy |
+| **8166** on this hub | Edit ComfyUI. Edit Image v08 |
+| **8177** on this hub | Production. Image Gen and Image Description |
+| **8188** on this hub | Extra production listener. Default `/comfyui` proxy |
+| **8166** on `192.168.91.12` | Route id `8166-12`. Hi-res, Ref Hi-res, Outpaint, Comp |
 
 ---
 
-## 4. The Working Solution
+## 4. Artist launch
 
-### 4.1 Shell: verify i2v inject (safe, no GPU)
-```bat
-cd /d D:\AI-Dev\Krish-ComfyNuke
-python -c "from client.comfy_client import ComfyClient; c=ComfyClient(workflow_path=r'D:\AI-Dev\Krish-ComfyNuke\video_minimax_h3_i2v.json'); c.load_workflow(); print('load',c.id_load); print('prompt',c.id_prompt,c.id_prompt_key); print('seed',c.id_seed,c.id_seed_key); wf=c.build_prompt(image_name='test_frame.png',prompt='gentle camera move',seed=42,filename_prefix='nuke/host/i2v_test'); print(wf['114']['inputs']['image'], wf['141']['inputs']['value'], wf['92']['inputs']['filename_prefix'], c.id_save)"
-```
-**Success output shape (exact keys):**
-```
-load 114
-prompt 141 value
-seed 132 noise_seed
-test_frame.png gentle camera move video/i2v_test 92
-```
-[VERIFIED] equivalent run succeeded.
-
-**If fails with SaveImage error:** `build_prompt` regression — restore SaveVideo branch (see §8).
-
-**If fails with prompt node error:** workflow JSON changed — re-open `video_minimax_h3_i2v.json` and re-discover.
-
-### 4.2 Shell: probe a downloaded video (safe)
-```bat
-cd /d D:\AI-Dev\Krish-ComfyNuke
-python -c "import sys; sys.path.insert(0,'nuke'); import ComfyEdit as ce; print(ce._probe_video_media(r'D:\AI-Dev\Krish-ComfyNuke\client\out\comfy_i2v_20260805_172452_36e79ce0.mp4'))"
-```
-**Observed success:** `{'width': 1376, 'height': 768, 'fps': 24.0, 'frames': 124}` (OpenCV). [VERIFIED]  
-May log: `[ComfyEdit] ffprobe skip: [WinError 2] The system cannot find the file specified` — harmless if OpenCV works.
-
-### 4.3 Shell: ping Comfy (network; human approval if shared)
-```bat
-cd /d D:\AI-Dev\Krish-ComfyNuke
-python client\comfy_client.py --ping-only --image dummy --prompt x --server http://192.168.91.13:8188
-```
-[VERIFIED] documented in `docs/PHASE1_NUKE.md`. Live success depends on server up.
-
-### 4.4 Nuke: reload UI code (safe)
-In Nuke Script Editor:
-```python
-exec(open(r"D:/AI-Dev/Krish-ComfyNuke/nuke/load_in_nuke.py", encoding="utf-8").read())
-```
-**Success:** menu `Nuke → ComfyUI` with Edit Image / Image Gen / Image to Video / Ping Server. Banner may still omit i2v in print text (stale). [VERIFIED] menu registration code; [INFERRED] banner stale only.
-
-### 4.5 Nuke: Image to Video end-to-end (costs GPU time — not silent-rerun)
-1. Select a **Read**, **Merge**, or **Roto** (any node that can yield an image via export).
-2. Set timeline frame to the frame to send.
-3. **ComfyUI → Image to Video...**
-4. Enter motion prompt (goes to node **141**).
-5. Optional: uncheck Random seed / set seed.
-6. Confirm. Keep working; watch Script Editor for `Inject: load=114 prompt=141.value` and later download.
-7. Popup: `ComfyUI done (video).` + new `ComfyEdit_Result_###` Read.
-8. On that Read: **`first`/`last` should span video duration** (e.g. 1–124), format ≈ media resolution — not 1–1 hold.
-
-**Timeout:** poll timeout for i2v is **1800 s** (30 min) in `schedule_image_to_video`. [VERIFIED] code. Generation can take many minutes; log may show `Comfy running (Ns)…` every ~10s.
-
-**Do not re-queue** while `_BG_JOB_ACTIVE` — second job shows “A Comfy job is already running…”.
-
-### 4.6 Nuke: Edit Image (summary)
-1. Prefer **Roto** with matte for masked edit, or **Read** full frame.
-2. **ComfyUI → Edit Image...** → prompt → node **289**.
-3. Export builds RGBA under `%TEMP%\comfy_nuke\input_rgba.png` (overwrite).
-4. Poll timeout **600 s** default for edit path. [VERIFIED] `_POLL_STATE` timeout 600 for edit.
-
-### 4.7 Nuke: Image Gen
-1. **ComfyUI → Image Gen...** — no selection required for generation itself.
-2. Prompt → node **73**. No upload. [VERIFIED] `id_load is None`.
-
-### 4.8 File edit that fixed SaveVideo (do not reverse)
-In `client/comfy_client.py` `build_prompt`, after computing `prefix`:
-- If `SaveImage` exists → set its `filename_prefix`.
-- **Else if** `SaveVideo` / `VHS_VideoCombine` / `CreateVideo` present → set `id_save` to that node; **do not** require stitch/SaveImage.
-- Else inject SaveImage from stitch/preview as before.
-- Loop still sets SaveVideo `filename_prefix` to `video/{base}` where `base = Path(prefix).name`.
-
----
-
-## 5. What FAILED — and Why This Way, Not Another
-
-### Dead ends / failures
-1. **`build_prompt` hard-required SaveImage for all workflows**  
-   - Looked reasonable for edit/gen (both have SaveImage).  
-   - Failed on MiniMax i2v with exact `ComfyError: Workflow has no SaveImage / stitch / preview image source`.  
-   - Alternative rejected: always inject a dummy SaveImage wired to CreateVideo frames — would fight video pipeline and duplicate outputs. Prefer native SaveVideo history download.
-
-2. **Bare `exec(ComfyEdit.py)` in Nuke**  
-   - Looked like quick load.  
-   - Failed: module name / callbacks break (`NameError: name 'ComfyEdit' is not defined` per PHASE1).  
-   - Solution: `load_in_nuke.py` + `sys.modules['ComfyEdit']`.
-
-3. **Python threads for Comfy wait**  
-   - Looked good for non-blocking UI.  
-   - Failed: Nuke crashes when touching Nuke API off main thread / via unsafe callbacks.  
-   - Solution: **only** `QTimer.singleShot` → `_poll_comfy_tick` on main thread. Do not “improve” with threads.
-
-4. **Qt-based alpha invert**  
-   - Looked fine for mask flip.  
-   - Crashed Nuke (bits hacks).  
-   - Solution: **PIL-only** invert for alpha/mask_luma.
-
-5. **Assuming LoadImage always exists**  
-   - Edit uses 278; gen has none.  
-   - Error path if forced (historical: Image Gen + node 278).  
-   - Solution: `id_load` optional; only set image if present.
-
-6. **Injecting prompt into wrong PrimitiveStringMultiline**  
-   - i2v has two: `140` system (huge compiler system text), `141` user.  
-   - If agent picks “first multiline”, may hit system or wrong node depending on order.  
-   - Solution: `_find_user_prompt_inject` follows LLM `user_prompt_input` link first.
-
-7. **Video Read: trust Nuke auto range only**  
-   - Sometimes left 1-frame hold.  
-   - Solution: probe frames + set knobs explicitly; set format from media size.
-
-8. **Prefer EXR over video in multi-output history** (if ever both present)  
-   - `prefer_output_file` scores video extensions first, then EXR, then PNG. [VERIFIED] code. Changing score order can download wrong media type.
-
-### Design choices to preserve
-| Choice | Why | Do not replace with |
-|--------|-----|---------------------|
-| Sequential jobs per Nuke session | Shared GPU; simpler client | Parallel multi-prompt from one Nuke |
-| Fixed temp filenames under `%TEMP%\comfy_nuke\` | Avoid temp spam | UUID per write every time (disk clutter) |
-| Unique Comfy `filename_prefix` per job (`nuke/<host>/<stamp>`) | Multi-artist no clobber | Fixed `ComfyUI_00001` style |
-| Auto-discover inject nodes | Workflow renumbers | Hardcode only (still have fallbacks NODE_*) |
-| SaveVideo `video/{stamp}` prefix | Isolates video outputs | Same prefix as SaveImage without `video/` |
-| Random seed default ON in panels | Artist variety | Always seed=42 only |
-| Background poll + log, popup on complete | UX while waiting long i2v | Modal blocking for 30 min |
-| No “Run on selected” menu shortcuts | User asked remove; less accidental fire | Re-adding without ask |
-
----
-
-## 6. Traps
-
-### DO NOT TOUCH (deliberate)
-- **Main-thread-only poll** (`_poll_comfy_tick`, `_schedule_ms`) — not redundant.
-- **PIL invert, not Qt** — crash avoidance.
-- **System prompt node 140 (i2v) / edit system path** — do not overwrite with artist text.
-- **`prefer_output_file` video-first ordering** — i2v depends on it if multiple files appear.
-- **SaveVideo branch without injecting SaveImage** — reverse breaks i2v.
-- **Write `inpanel=False`** where used — panel popups / locks historically painful.
-
-### Order / silent no-ops
-- If `load_in_nuke.py` path wrong → RuntimeError `ComfyEdit.py not found`.
-- If job already active → early return message; second click appears to “do nothing” beyond message.
-- If prompt empty → “Prompt is empty” / no queue.
-- If no node selected for i2v/edit → message to select Read/Merge/Roto.
-- `build_prompt` with `image_name` but gen workflow: image ignored (no LoadImage) — not an error.
-- `ffprobe` missing: probe falls back to OpenCV; log noise only.
-
-### Expected noise vs real failure
-| Output | Meaning |
-|--------|---------|
-| `ffprobe skip: [WinError 2] The system cannot find the file specified` | Harmless if frames/size still probed | [VERIFIED] |
-| `Comfy waiting (Ns)…` / `Comfy running (Ns)…` | Normal poll | |
-| `Workflow has no SaveImage / stitch / preview image source` | **Real failure** — SaveVideo path broken | |
-| `Job finished but no output media (image/video)` | History empty or wrong output type | |
-| `A Comfy job is already running in this Nuke session` | Real lock, not noise | |
-| Popup `ComfyUI done (video)` with Read **first=last=1** and still image | **False success for duration** — probe/range failed | [INFERRED] |
-
-### Slow operations
-| Step | Rough duration |
-|------|----------------|
-| Nuke PNG export | seconds |
-| Upload frame | seconds (size-dependent) |
-| Edit / image gen | often minutes (queue + model) |
-| MiniMax i2v | many minutes; timeout 1800s | [VERIFIED] timeout; duration GAP per run |
-| Download mp4 | seconds–tens of seconds |
-
-### Dangerous
-- Queueing on shared `192.168.91.13:8188` consumes GPU and blocks other artists.
-- Overwriting `%TEMP%\comfy_nuke\*.png` every run — expected; do not point other tools at those as permanent.
-- Deleting `client/out/*` loses artist deliverables (e.g. `comfy_i2v_*.mp4`).
-- Long i2v is cost/time on production box.
-
----
-
-## 7. Verification and Rollback
-
-### A. Inject unit checks (no server required for discovery; build_prompt local only)
-Commands in §4.1–4.2.  
-**False positive:** `load_workflow` succeeds but you never call `build_prompt` — SaveVideo bug stays hidden until queue time.
-
-### B. Live Comfy ping
-```bat
-python client\comfy_client.py --ping-only --image dummy --prompt x --server http://192.168.91.13:8188
-```
-**False positive:** ping OK does not prove models for MiniMax/LLM are loaded.
-
-### C. Full i2v (Nuke)
-1. Reload via `load_in_nuke.py`.
-2. Run Image to Video on a known plate.
-3. Confirm log: `Inject: load=114 prompt=141.value`.
-4. Confirm file under `D:\AI-Dev\Krish-ComfyNuke\client\out\comfy_i2v_*.mp4`.
-5. Confirm Read: multi-frame range, format matches probe.
-
-**False positive:** file downloads and Read appears, but `first=last=1` (still broken for duration). Check knobs and Script Editor lines:
-- `Video Read range X–Y`
-- `Video Read format → WxH`
-
-### D. Probe-only false positive
-OpenCV may report frame count wrong on some codecs; if Nuke disagrees after reload, prefer Nuke `origlast > origfirst` when valid (code already prefers Nuke multi-frame orig range when `ol > of`).
-
-### Rollback
-| Change | Undo |
-|--------|------|
-| Code edits in `comfy_client.py` / `ComfyEdit.py` | `git checkout --` those paths if under git; else restore from `D:\AI-Dev\Krish-ComfyNuke\backup\V01\nuke\ComfyEdit.py` **only if** that backup is intentionally older (may lack i2v). [VERIFIED] backup tree exists; **not** bit-identical to current — treat carefully. |
-| Queued Comfy job | Cancel from ComfyUI UI on server if available; client has no cancel API documented here. GAP exact cancel. |
-| Downloaded files | Delete specific `client\out\comfy_*` — irreversible for that file. |
-| Nuke Read nodes | Delete `ComfyEdit_Result_*` in script — does not delete media on disk. |
-
-Nothing in client automatically deletes remote Comfy output folders beyond unique prefixes.
-
----
-
-## 8. Changes Made and Open Questions
-
-### Files (primary integration surface)
-| Path | Role / one-line summary |
-|------|-------------------------|
-| `D:\AI-Dev\Krish-ComfyNuke\nuke\ComfyEdit.py` | Nuke menus, export (edit/i2v), QTimer poll, result Read, video range/format helpers |
-| `D:\AI-Dev\Krish-ComfyNuke\nuke\load_in_nuke.py` | Safe reload of ComfyEdit + client (stale banner text) |
-| `D:\AI-Dev\Krish-ComfyNuke\nuke\menu_snippet.py` | For `~/.nuke/menu.py` permanent load |
-| `D:\AI-Dev\Krish-ComfyNuke\client\comfy_client.py` | HTTP API, inject discovery, build_prompt, SaveVideo support, prefer video/EXR/PNG |
-| `D:\AI-Dev\Krish-ComfyNuke\client\config.example.json` | Example server/workflow/timeout |
-| `D:\AI-Dev\Krish-ComfyNuke\Edit_Image_v08.json` | Edit workflow API format |
-| `D:\AI-Dev\Krish-ComfyNuke\Image_generation_v01.json` | Txt2img workflow |
-| `D:\AI-Dev\Krish-ComfyNuke\video_minimax_h3_i2v.json` | MiniMax H3 i2v (114 / 141 / 92) |
-| `D:\AI-Dev\Krish-ComfyNuke\client\out\` | Downloaded results (png/mp4) |
-| `D:\AI-Dev\Krish-ComfyNuke\docs\PHASE1_NUKE.md` | Phase 1 docs (edit-focused) |
-| `D:\AI-Dev\Krish-ComfyNuke\docs\NUKOMFY_REFERENCE.md` | Nukomfy reference |
-| `D:\AI-Dev\Krish-ComfyNuke\backup\V01\nuke\` | Older snapshot of nuke files |
-| `D:\AI-Dev\Krish-ComfyNuke\ComfyUI-Nukomfy-Suite\` | Separate Comfy custom nodes package in-repo |
-| `D:\AI-Dev\Krish-ComfyNuke\Smart-Image-Crop-and-Stitch\` | Crop/stitch custom nodes + sample assets |
-| `D:\AI-Dev\Krish-ComfyNuke\PLAYBOOK.md` | This handoff |
-
-Deleted files in recent work: **none known** for the i2v fix path. Menu *commands* removed (not files): “Run Edit on selected…”, “Run Image Gen…”, “Run Image to Video on selected…”.
-
-### Open questions / gaps
-1. Exact Nuke version and whether all artists use the same `load_in_nuke` path.
-2. Whether `ffprobe` should be required on artist PCs or OpenCV-only is policy.
-3. MiniMax duration/resolution defaults (workflow node `136` PrimitiveFloat duration value `5`) — intentional length?
-4. LLM base URL in workflow `137` is `http://127.0.0.0:11434/` (Ollama on **Comfy host**) — must be healthy for prompt compile; if Ollama down, i2v may fail mid-graph. [VERIFIED] string in JSON; runtime health GAP.
-5. Should root project frame range / fps auto-expand to match video? Currently only Read node is adjusted. [ASSUMED] user wanted Read duration only.
-6. `load_in_nuke.py` print still outdated — should be fixed next cosmetic pass.
-7. Full retest of Edit Image + EXR prefer after i2v changes — not done in this handoff session.
-8. Auth / HTTPS / non-default ports for other facilities — not supported beyond editable server string.
-
-### Questions to ask a human if available
-- Is `192.168.91.13:8188` still the only production endpoint?
-- Confirm latest live i2v Read shows correct frame range after the `_apply_video_read_range` change (user had return working *before* range fix; range fix not re-confirmed by user in a later message).
-- Any need to re-add quick-run menu items?
-
----
-
-## Appendix A — Workflow inject cheatsheet [VERIFIED discovery 2026-08-05]
-
-```
-Edit_Image_v08.json
-  LoadImage 278 | prompt 289 value | seed 185 seed | SaveImage 299
-
-Image_generation_v01.json
-  LoadImage None | prompt 73 value | seed 53 seed | SaveImage 29
-
-video_minimax_h3_i2v.json
-  LoadImage 114 | prompt 141 value | seed 132 noise_seed | SaveVideo 92
-  (CreateVideo 133 also present; do not require SaveImage)
-```
-
-## Appendix B — Nuke reload one-liner [VERIFIED]
+Every Nuke session, Script Editor:
 
 ```python
-exec(open(r"D:/AI-Dev/Krish-ComfyNuke/nuke/load_in_nuke.py", encoding="utf-8").read())
+exec(__import__('urllib.request').request.urlopen('http://192.168.91.11:8600/nuke/remote_bootstrap.py', timeout=60).read().decode('utf-8'))
 ```
+
+Source file: `nuke/artist_one_liner.txt`.
+
+Bootstrap always re-downloads `nuke/ComfyEdit.py`, `client/comfy_client.py`, and the workflows listed in `_ALWAYS_REFRESH`. Anything under `Workflows/Comp/` is also refreshed because the path contains `/Comp/`.
+
+After a menu or script change, tell artists to run that line again. A git push alone does not update an open Nuke.
 
 ---
 
-*End of PLAYBOOK.md*
+## 5. Pix-Edit menu
+
+`register_menu()` in `nuke/ComfyEdit.py`. One job at a time per Nuke (`_BG_JOB_ACTIVE`). ComfyUI still has its own queue.
+
+| Menu | Workflow | Server id | What Nuke sends | Result |
+|------|----------|-----------|-----------------|--------|
+| Edit Image | `Workflows/Edit_Image_v08.json` | `8166` | plate LoadImage **80**, mask LoadImage **123**, prompt **109** `.value` | Read of the still |
+| Edit Image Hi-res | `Workflows/Edit_Image_Hi_res_v04.json` (alias `Edit_Image_Hi_res.json`) | `8166-12` | plate **500**, mask **499**, prompt **494** `.value` | Read. If `91.12` is down, tell the artist to use Edit Image. Do not fail over silently |
+| Edit Image Ref Hi-res | `Workflows/Edit_Image_Ref_Hi_res_v02.json` | `8166-12` | plate **500**, mask **499**, reference **510**, prompt **509** | Read |
+| Image Gen | `Workflows/Image_generation_v01.json` | `8177` | prompt **73** `.value`, no plate | Read. SaveImage **29** |
+| Image Outpaint | `Workflows/Image_outpaint_v01.json` | `8166-12` | image **13**, default prompt **73** “outpaint the image in red marked area”, SaveImageAdvanced **110** | Read |
+| Image Description | `Workflows/Image_Description_v01.json` | `8177` | text **4**, LoadImage **5**, PreviewAny **12**. A selected Crop sends only the cropped pixels | StickyNote, not a Read |
+| Image to Video | `Workflows/video_minimax_h3_i2v.json` | not assigned in `workflow_routes.json` (falls through to `main` / `:8188`) | current frame PNG → LoadImage **114**, prompt **141** `.value` | Video Read. The MiniMax node may be missing on a box; do not invent a route |
+| Comp → DepthCrafter Depth | `Workflows/Comp/DepthCrafter_Depth_V02.json` | `8166-12` | movie file → VHS_LoadVideo **3** input `video`. No prompt | SaveVideo **30** |
+| Comp → Video Alpha Mate | `Workflows/Comp/LTX_2.5_Alpha_Mate_V02.json` | `8166-12` | movie file → VHS_LoadVideo **9133** input `video` (template value `Comp-98.mp4`). No prompt. VAE Decode **9107** is full decode, not tiled | SaveVideo **9112** |
+| Ping Server | — | — | checks the proxy | — |
+
+Hi-res v03 (plate 164 / mask 167 / prompt 161) is legacy. The live menu prefers v04.
+
+Routing is by **workflow basename**. `resolve_server_for_workflow()` calls `GET /api/comfy-routes` and opens `http://192.168.91.11:8600/comfyui-r/<server_id>`. Change a box in the admin **Workflow servers** tab, or edit `workflow_routes.json`. No code-server restart for a route-only edit.
+
+Usage-log tool names (`server/usage_log.py` and `_nuke_tool_from_filename` in the client) must match the menu, and the specific name must be checked **before** the generic `video` / `i2v` rule:
+
+- DepthCrafter → `Comp Depth`
+- Alpha Mate → `Video Alpha Mate`
+
+`client_id` prefixes: `nuke-comp-` for Depth, `nuke-alpha-` for Alpha Mate. `infer_nuke_tool` checks `nuke-alpha` before `nuke-comp`.
+
+---
+
+## 6. How a Comp video job runs
+
+`schedule_comp_depth()` is the shared video-to-video path. DepthCrafter calls it with the defaults. Video Alpha Mate passes `load_id=9133`, `save_id=9112`, `label="Video Alpha Mate"`, `client_prefix="nuke-alpha"`.
+
+1. Selected node must be a Read of a real movie, or a node fed by that Read. Sequences (`%` or `#` in the path) are rejected.
+2. `_apply_project_gate` runs (see §7).
+3. The workflow JSON is refreshed from `:8600`. Comp files must be requested as `Workflows/Comp/<name>.json`, not only `Workflows/<name>.json`. Names are listed in `_COMP_WORKFLOW_NAMES`.
+4. `upload_video()` posts to Comfy `/upload/image` with `type=input` and keeps the movie extension.
+5. The graph is copied. Node `load_id` input `video` is set to the uploaded filename. Node `save_id` `filename_prefix` becomes `video/<stamp>`. `client.id_save` is the save node so the download prefers that video.
+6. `queue_prompt` sends `extra_data.workflow_file`, `nuke_tool`, and `project_code`. The hub enforces the code on `POST /prompt`.
+7. `_poll_comfy_tick` waits (timeout 3600s for Comp) and downloads the file.
+8. `_create_result_read` makes `ComfyEdit_Result_###`. For a movie, `_apply_video_read_range` sets the Read to frame **1** through the real last frame (`origfirst`/`origlast`/`first`/`last`, frame mode “start at”). It also sets the script frame range to **1–last** when the clip is longer than one frame, so Play covers the clip. The range is written **after** `reload`, because reload puts Nuke’s project range back. Length comes from ffprobe, then the mp4/mov sample table (`_mp4_video_frame_count`), then OpenCV.
+
+Image jobs still export a PNG of the current frame (or the Crop). They do not upload the whole sequence.
+
+---
+
+## 7. Project codes
+
+Live data: `server/project_codes.json` (gitignored). Logic: `server/project_codes.py`. Admin tab: **Project maintenance**.
+
+- Match is case-insensitive. The stored spelling is canonical (`oig_symu` validates as `OIG_SYMU`).
+- Groups: Roto, MM, CH-Paint, HYD-Paint, Comp, CG, DMP, All-Group. Groups are for admins. Artists type only the code.
+- Archive and restore. Do not delete codes that already appear in logs.
+- Bulk import moves an existing active code into the chosen group and restores an archived code into that group.
+- Groups in the admin UI start collapsed.
+- A workflow requires a code only when its **basename** is in `require_workflows`. Empty list means every workflow runs with no code.
+- A machine with **Skip project code** (R&D) bypasses the prompt and is logged with an empty project.
+- Enforcement is on the hub at queue time (`_enforce_project_code`), not only in the Nuke dialog. Public endpoints: `GET /projects/policy?workflow=` and `POST /projects/validate`.
+- On a required workflow, Nuke remembers the validated code for **6** jobs across any Pix-Edit tool (`PROJECT_CODE_STAY = 6`), then asks again. The next code gets another 6. State is only on that artist’s machine.
+- When a code is used, the output folder becomes `output_dir/<CODE>`.
+
+---
+
+## 8. Add another workflow
+
+Do all of these or artists will not see it.
+
+1. Put the API-format JSON in `Workflows/` or, for Comp, `Workflows/Comp/<Name>.json`. Do not leave it only at the repo root.
+2. Find the input node and the save node in that JSON. Record the id and the input key (`image` or `video` or `value`).
+3. Add a menu command in `register_menu()`. Comp items go on the existing `comp = m.addMenu("Comp")` submenu.
+4. Reuse `schedule_comp_depth()` for movie-in / video-out. Reuse the still-image schedulers for plate + prompt. Set `client.id_save` to the save node.
+5. Add the basename to `workflow_routes.json` with a real `server_id`. Comp and other custom graphs currently use `8166-12` (`http://192.168.91.12:8166`). Say which box you chose. If that box lacks the custom nodes, the job fails at queue time; move the route in Workflow servers. Do not guess a new IP silently.
+6. Add the basename to `KNOWN_WORKFLOWS` in `server/workflow_routes.py` so Project maintenance can list it. Discovery already scans `Workflows/*/*.json` one level down.
+7. Add the **repo-relative** path to all three lists: `SYNC_FILES` in `server/serve_code.py`, `_SYNC_FILES` and `_ALWAYS_REFRESH` in `nuke/remote_bootstrap.py`.
+8. Add the basename to `_COMP_WORKFLOW_NAMES` in `ComfyEdit.py` if the file lives under `Workflows/Comp/`, so refresh requests `Workflows/Comp/<name>.json`.
+9. Map the filename to a stable tool name in **both** `nuke_tool_from_filename` functions, and add that name to `CORE_NUKE_TOOLS`. Check the new name before the generic `video` rule.
+10. Restart `:8600` if you edited hub Python. Tell artists to re-run the one-liner.
+11. Do not add the workflow to `require_workflows` unless asked.
+
+`workflow_routes.json` stores basenames only. The path on disk can be nested.
+
+---
+
+## 9. Git
+
+Remote: https://github.com/Krish-701/ComfyNuke, branch `main`.
+
+Latest pushed commit when this playbook was written: `eb0ca15` — “Add Pix-Edit Comp video tools and remember a project code for six jobs.”
+
+Commit only the files the task touched. Leave `.forbidden`, `.grok/`, and `temp-old/` untracked. Do not commit the live project-code list.
+
+Push only when the user asks, and only with a token they just gave you. Do not write the token into a file in the repo.
+
+---
+
+## 10. Checks that do not need Nuke
+
+```bash
+curl -sS http://127.0.0.1:8600/health
+curl -sS -o /dev/null -w "%{http_code}\n" \
+  http://127.0.0.1:8600/Workflows/Comp/LTX_2.5_Alpha_Mate_V02.json
+curl -sS http://127.0.0.1:8600/api/comfy-routes
+python3 -m py_compile nuke/ComfyEdit.py client/comfy_client.py server/serve_code.py
+```
+
+A 200 on the workflow URL proves the hub can serve it. It does not prove the GPU box has the custom nodes.
+
+---
+
+## 11. What is already done
+
+- Live graphs are served from `Workflows/`. Old root URLs still alias to the same file when the root copy is missing.
+- Pix-Edit menus in the table in §5, including Comp → DepthCrafter Depth and Comp → Video Alpha Mate.
+- Returned movies use Read frame range 1 through the last frame, and the script range is set to that span.
+- Project codes, groups, bulk import, search, sort, multi-archive, collapsible groups, usage logs, R&D skip.
+- A validated project code stays for 6 jobs on that Nuke, then is asked again.
+
+## 12. Do not assume
+
+- Which ComfyUI box has DepthCrafter, LTX Alpha Mate, or MiniMax installed. The route says where we send the job. A missing custom node is a ComfyUI install problem, not a Nuke inject problem.
+- That systemd is running the code server. Check the process.
+- That an artist Nuke has the new menu before they run the one-liner.
+- Node IDs from `docs/STUDIO_PLAYBOOK.md` or the old Windows `PLAYBOOK`. Those files lag this one.

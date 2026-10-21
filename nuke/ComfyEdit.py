@@ -176,13 +176,13 @@ COMP_DEPTH_REL = "Workflows/Comp/DepthCrafter_Depth_V02.json"
 COMP_DEPTH_WORKFLOW = os.path.join(REPO_ROOT, COMP_DEPTH_REL).replace("\\", "/")
 COMP_DEPTH_LOAD = "3"  # VHS_LoadVideo.video
 COMP_DEPTH_SAVE = "30"  # SaveVideo
-COMP_ALPHA_REL = "Workflows/Comp/LTX_2.5-Alpha-Mate_V01.json"
+COMP_ALPHA_REL = "Workflows/Comp/LTX_2.5_Alpha_Mate_V02.json"
 COMP_ALPHA_WORKFLOW = os.path.join(REPO_ROOT, COMP_ALPHA_REL).replace("\\", "/")
 COMP_ALPHA_LOAD = "9133"  # VHS_LoadVideo.video (Comp-98.mp4)
 COMP_ALPHA_SAVE = "9112"  # SaveVideo
 _COMP_WORKFLOW_NAMES = (
     "DepthCrafter_Depth_V02.json",
-    "LTX_2.5-Alpha-Mate_V01.json",
+    "LTX_2.5_Alpha_Mate_V02.json",
 )
 IMAGE_DESC_PROMPT_NODE = "4"
 IMAGE_DESC_LOAD_NODE = "5"

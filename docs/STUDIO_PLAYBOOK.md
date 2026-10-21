@@ -1,6 +1,8 @@
 # ComfyNuke studio playbook — hub `192.168.91.11`
 
-Handoff for a later session (human or agent). Hub facts were first verified **2026-08-20**; this file was aligned again **2026-09-04** (Hi-res v01, Image Description crop, usage-log dates, `:8600` workflow allow-list). If reality disagrees, re-check the live commands in §8 before changing routing, node IDs, or start scripts.
+**Product handoff for agents is [../PLAYBOOK.md](../PLAYBOOK.md) (2026-10-20).** Use that file for menus, node IDs, Comp workflows, project codes, and how to add a workflow. This file is the older start/stop and GPU note. Its menu table still says Hi-res v03 and does not list Outpaint or Comp. The live code server is a manual `nohup` of `serve_code.py`, not the systemd unit (that unit is inactive).
+
+Hub facts were first verified **2026-08-20**; this file was aligned again **2026-09-04**. If reality disagrees, re-check the live commands in §8 before changing routing, node IDs, or start scripts.
 
 Nuke artists use **HTTP only**. No Samba, no SSH, no share for code.
 

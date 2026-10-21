@@ -62,7 +62,7 @@ _SYNC_FILES = (
     "Workflows/Image_Description_v01.json",
     "Workflows/video_minimax_h3_i2v.json",
     "Workflows/Comp/DepthCrafter_Depth_V02.json",
-    "Workflows/Comp/LTX_2.5-Alpha-Mate_V01.json",
+    "Workflows/Comp/LTX_2.5_Alpha_Mate_V02.json",
     "studio_config.json",  # optional
     "studio_config.example.json",
     "workflow_routes.json",
@@ -90,7 +90,7 @@ _ALWAYS_REFRESH = frozenset(
         "Workflows/Image_Description_v01.json",
         "Workflows/video_minimax_h3_i2v.json",
         "Workflows/Comp/DepthCrafter_Depth_V02.json",
-        "Workflows/Comp/LTX_2.5-Alpha-Mate_V01.json",
+        "Workflows/Comp/LTX_2.5_Alpha_Mate_V02.json",
         "workflow_routes.json",
         "studio_config.json",
     ]
