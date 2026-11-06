@@ -200,6 +200,7 @@ def _make_user(
         "enabled": bool(enabled),
         "password": password_hash if password_hash is not None else _hash_password(password),
         "created_at": int(time.time()),
+        "can_assign_project_code": False,
     }
 
 
@@ -212,6 +213,7 @@ def _public_user(u: Dict[str, Any]) -> Dict[str, Any]:
         "enabled": bool(u.get("enabled", True)),
         "permissions": role_permissions(str(u.get("role") or "viewer")),
         "role_label": ROLE_LABELS.get(str(u.get("role") or "viewer"), ""),
+        "can_assign_project_code": bool(u.get("can_assign_project_code")),
     }
 
 
@@ -581,6 +583,7 @@ class AccessControl:
                 "permissions": role_permissions(role),
                 "display_name": (u or {}).get("display_name") or username,
                 "user_id": (u or {}).get("id") or "",
+                "can_assign_project_code": bool((u or {}).get("can_assign_project_code")),
             }
 
     def session_has(self, token: Optional[str], perm: str) -> bool:
@@ -638,6 +641,7 @@ class AccessControl:
         role: Optional[str] = None,
         enabled: Optional[bool] = None,
         new_password: Optional[str] = None,
+        can_assign_project_code: Optional[bool] = None,
     ) -> Dict[str, Any]:
         with self._lock:
             idx = -1
@@ -686,6 +690,8 @@ class AccessControl:
                     if not admins:
                         raise ValueError("cannot disable the last admin")
                 u["enabled"] = bool(enabled)
+            if can_assign_project_code is not None:
+                u["can_assign_project_code"] = bool(can_assign_project_code)
             if new_password is not None and str(new_password):
                 if len(str(new_password)) < 8:
                     raise ValueError("password min 8 characters")

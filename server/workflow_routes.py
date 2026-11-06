@@ -33,6 +33,8 @@ KNOWN_WORKFLOWS = (
     "video_minimax_h3_i2v.json",
     "DepthCrafter_Depth_V02.json",
     "LTX_2.5_Alpha_Mate_V02.json",
+    "Image_upscale_Creative_V01.json",
+    "Image_IMI_Upscale_V01.json",
 )
 
 

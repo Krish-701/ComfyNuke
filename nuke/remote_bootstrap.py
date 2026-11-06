@@ -63,6 +63,8 @@ _SYNC_FILES = (
     "Workflows/video_minimax_h3_i2v.json",
     "Workflows/Comp/DepthCrafter_Depth_V02.json",
     "Workflows/Comp/LTX_2.5_Alpha_Mate_V02.json",
+    "Workflows/Images/Image_upscale_Creative_V01.json",
+    "Workflows/Images/Image_IMI_Upscale_V01.json",
     "studio_config.json",  # optional
     "studio_config.example.json",
     "workflow_routes.json",
@@ -91,6 +93,8 @@ _ALWAYS_REFRESH = frozenset(
         "Workflows/video_minimax_h3_i2v.json",
         "Workflows/Comp/DepthCrafter_Depth_V02.json",
         "Workflows/Comp/LTX_2.5_Alpha_Mate_V02.json",
+    "Workflows/Images/Image_upscale_Creative_V01.json",
+    "Workflows/Images/Image_IMI_Upscale_V01.json",
         "workflow_routes.json",
         "studio_config.json",
     ]
@@ -264,6 +268,8 @@ def _sync_from_server(base_url, cache, server_manifest, force_all=False):
             or rel.endswith("_i2v.json")
             or "depthcrafter" in rel.lower()
             or "/comp/" in rel.lower()
+            or "/images/" in rel.lower()
+            or "image_upscale" in rel.lower()
         )
         need = force_all or always or _file_needs_update(cache, rel, entry)
         if not need:

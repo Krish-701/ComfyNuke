@@ -88,6 +88,16 @@
       "file": "LTX_2.5_Alpha_Mate_V02.json",
       "server_id": "8166-12",
       "notes": "Comp Video Alpha Mate V02: upload video node 9133, SaveVideo node 9112, VAE Decode 9107 (no tiling) on 192.168.91.12:8166"
+    },
+    {
+      "file": "Image_upscale_Creative_V01.json",
+      "server_id": "8166-12",
+      "notes": "Image Upscale Creative: LoadImage 38, SaveImage 39 on 192.168.91.12:8166"
+    },
+    {
+      "file": "Image_IMI_Upscale_V01.json",
+      "server_id": "8166-12",
+      "notes": "Image IMI Upscale: LoadImage 129, SaveImage 131 on 192.168.91.12:8166"
     }
   ]
 }

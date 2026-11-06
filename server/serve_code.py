@@ -43,6 +43,7 @@ if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
 from access_control import AccessControl  # noqa: E402
+from comfy_lane import ComfyLane  # noqa: E402
 from project_codes import ProjectCodes, workflow_name  # noqa: E402
 from workflow_routes import (  # noqa: E402
     default_upstream,
@@ -140,6 +141,8 @@ SYNC_FILES = (
     "Workflows/video_minimax_h3_i2v.json",
     "Workflows/Comp/DepthCrafter_Depth_V02.json",
     "Workflows/Comp/LTX_2.5_Alpha_Mate_V02.json",
+    "Workflows/Images/Image_upscale_Creative_V01.json",
+    "Workflows/Images/Image_IMI_Upscale_V01.json",
     "studio_config.json",
     "studio_config.example.json",
     "workflow_routes.json",
@@ -222,6 +225,25 @@ def build_manifest(root: Path) -> Dict[str, Any]:
         "generated_at": int(time.time()),
         "files": files,
     }
+
+
+_PKG_VERSION_CACHE: Dict[str, Any] = {"at": 0.0, "version": ""}
+
+
+def package_version(root: Path) -> str:
+    """Short hash of the artist sync set. Cached a few seconds."""
+    now = time.time()
+    cached = str(_PKG_VERSION_CACHE.get("version") or "")
+    if cached and now - float(_PKG_VERSION_CACHE.get("at") or 0) < 5:
+        return cached
+    try:
+        ver = str(build_manifest(root).get("version") or "")
+    except Exception:
+        ver = cached
+    if ver:
+        _PKG_VERSION_CACHE["at"] = now
+        _PKG_VERSION_CACHE["version"] = ver
+    return ver
 
 
 class ComfyNukeHandler(SimpleHTTPRequestHandler):
@@ -474,6 +496,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                     "role": sess.get("role"),
                     "permissions": sess.get("permissions") or [],
                     "user_id": sess.get("user_id"),
+                    "can_assign_project_code": bool(sess.get("can_assign_project_code")),
                 }
             else:
                 st["user"] = None
@@ -628,8 +651,15 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                             "ts_iso": r.get("ts_iso") or "",
                             "runtime_sec": r.get("runtime_sec"),
                             "prompt_id": r.get("prompt_id") or "",
+                            "project_code": "",
                         }
                         break
+                if who:
+                    for r in hits:
+                        code = str(r.get("project_code") or "").strip()
+                        if code:
+                            who["project_code"] = code
+                            break
                 self._send_json(
                     {
                         "ok": True,
@@ -959,8 +989,42 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                     role=data.get("role"),
                     enabled=data.get("enabled") if "enabled" in data else None,
                     new_password=data.get("new_password") or data.get("password"),
+                    can_assign_project_code=(
+                        data.get("can_assign_project_code")
+                        if "can_assign_project_code" in data
+                        else None
+                    ),
                 )
                 self._send_json({"ok": True, "user": u})
+                return True
+            if path_only == "/admin/api/logs/assign_project":
+                sess = self._session_user() or {}
+                if not sess.get("can_assign_project_code"):
+                    self._send_json(
+                        {"error": "This user is not allowed to add a project code"},
+                        status=403,
+                    )
+                    return True
+                raw_code = str(data.get("project_code") or data.get("code") or "")
+                canonical = ""
+                if self.projects is not None:
+                    canonical = self.projects.match(raw_code) or ""
+                if not canonical:
+                    self._send_json(
+                        {"error": "Project code not recognized"},
+                        status=400,
+                    )
+                    return True
+                try:
+                    result = self.usage.set_project_on_prompt(
+                        str(data.get("prompt_id") or data.get("id") or ""),
+                        canonical,
+                        by_user=str(sess.get("username") or ""),
+                    )
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, status=400)
+                    return True
+                self._send_json({"ok": True, **result})
                 return True
             if path_only == "/admin/api/users/delete":
                 ok = self.access.delete_user(
@@ -1282,6 +1346,62 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
         except Exception:
             pass
 
+    def _script_build_ok(self) -> bool:
+        """True only when Nuke loaded the package that is on the hub right now."""
+        got = (self.headers.get("X-ComfyNuke-Build") or "").strip()
+        root = self._repo_root()
+        want = package_version(root)
+        if not want:
+            return True
+        return bool(got) and got == want
+
+    def _queue_server_known(self, server_id: str) -> bool:
+        sid = (server_id or "main").strip() or "main"
+        if sid == "main":
+            return True
+        try:
+            cfg = load_routes(self._repo_root())
+        except Exception:
+            return False
+        return bool(server_by_id(cfg, sid))
+
+    def _handle_comfy_queue_status(self) -> None:
+        if not self._require_artist_ip():
+            return
+        lane = getattr(self, "lane", None)
+        if lane is None:
+            self._send_json({"ok": False, "error": "queue unavailable"}, status=404)
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        ticket = str((qs.get("ticket") or [""])[0] or "")
+        self._send_json(lane.status(ticket))
+
+    def _handle_comfy_queue_post(self, path_only: str) -> None:
+        if not self._require_artist_ip():
+            return
+        lane = getattr(self, "lane", None)
+        if lane is None:
+            self._send_json({"ok": False, "error": "queue unavailable"}, status=404)
+            return
+        data = self._read_json_body()
+        if path_only.endswith("/leave"):
+            self._send_json(lane.leave(str(data.get("ticket") or "")))
+            return
+        sid = str(data.get("server_id") or "main").strip() or "main"
+        if not self._queue_server_known(sid):
+            self._send_json(
+                {"ok": False, "error": "unknown ComfyUI server id: %s" % sid},
+                status=404,
+            )
+            return
+        self._send_json(
+            lane.join(
+                sid,
+                artist=str(data.get("artist") or ""),
+                workflow=str(data.get("workflow") or ""),
+            )
+        )
+
     def _proxy_comfy(self, method: str) -> None:
         if not self._require_artist_ip():
             return
@@ -1294,6 +1414,7 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
         upstream = default_upstream(cfg, self.comfy_upstream)
         api_key = ""
         path = raw_path
+        sid = "main"
         if path == "/comfyui-r" or path.startswith("/comfyui-r/"):
             rest = path[len("/comfyui-r") :].lstrip("/")
             parts = rest.split("/", 1)
@@ -1325,10 +1446,34 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
         body = self.rfile.read(length) if length > 0 else None
 
         if method == "POST" and path.rstrip("/") == "/prompt":
+            if not self._script_build_ok():
+                self._send_bytes(
+                    (
+                        "Reload the script.\n"
+                        "Pix-Edit was updated.\n"
+                    ).encode("utf-8"),
+                    "text/plain; charset=utf-8",
+                    status=409,
+                )
+                return
             stamped = self._enforce_project_code(body, ident)
             if stamped is None:
                 return
             body = stamped
+            lane = getattr(self, "lane", None)
+            if lane is not None:
+                ticket = (self.headers.get("X-ComfyNuke-Ticket") or "").strip()
+                allowed, why = lane.claim(sid, ticket)
+                if not allowed:
+                    self._send_json(
+                        {
+                            "error": why,
+                            "queue": "busy",
+                            "server_id": sid,
+                        },
+                        status=409,
+                    )
+                    return
 
         headers = {}
         for k in ("Content-Type", "Accept", "User-Agent", "Authorization"):
@@ -1410,6 +1555,10 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
             if self._handle_admin_get(path_only):
                 return
             self.send_error(404)
+            return
+
+        if path_only == "/comfy-queue/status":
+            self._handle_comfy_queue_status()
             return
 
         if path_only == "/projects/policy":
@@ -1633,6 +1782,9 @@ class ComfyNukeHandler(SimpleHTTPRequestHandler):
                 return
             self.send_error(404)
             return
+        if path_only in ("/comfy-queue/join", "/comfy-queue/leave"):
+            self._handle_comfy_queue_post(path_only)
+            return
         if path_only == "/projects/validate":
             if not self._require_artist_ip():
                 return
@@ -1718,6 +1870,36 @@ def _parse_ports(primary: int, extra: str) -> List[int]:
     return ports
 
 
+def _make_busy_probe(root: Path, default_upstream: str):
+    """True when that ComfyUI already has a running or pending job."""
+
+    def probe(server_id: str) -> bool:
+        sid = (server_id or "main").strip() or "main"
+        if sid == "main":
+            base = (default_upstream or "").rstrip("/")
+        else:
+            cfg = load_routes(root)
+            srv = server_by_id(cfg, sid)
+            if not srv:
+                return True
+            base = str(srv.get("url") or "").rstrip("/")
+        if not base:
+            return True
+        try:
+            req = urllib.request.Request(base + "/queue", method="GET")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                data = json.loads(resp.read().decode("utf-8") or "{}")
+        except Exception:
+            return True
+        if not isinstance(data, dict):
+            return True
+        running = data.get("queue_running") or []
+        pending = data.get("queue_pending") or []
+        return bool(running or pending)
+
+    return probe
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="ComfyNuke code HTTP server + access control")
     parser.add_argument("--root", default="", help="ComfyNuke repo root")
@@ -1780,6 +1962,9 @@ def main() -> int:
     ComfyNukeHandler.projects = ProjectCodes(root / "server" / "project_codes.json")
     ComfyNukeHandler.comfy_upstream = args.comfy_upstream.rstrip("/")
     ComfyNukeHandler.admin_html_path = admin_html
+    ComfyNukeHandler.lane = ComfyLane(
+        _make_busy_probe(root, ComfyNukeHandler.comfy_upstream)
+    )
 
     handler = partial(ComfyNukeHandler, directory=str(root))
     ports = _parse_ports(args.port, args.extra_ports)

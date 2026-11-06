@@ -1,0 +1,256 @@
+{
+  "3": {
+    "inputs": {
+      "megapixels": 8,
+      "tile_megapixels": 2,
+      "overlap": 128,
+      "multiple": 32,
+      "max_growth": 8,
+      "image": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "AUSBOSS_NODES_TiledUpscale",
+    "_meta": {
+      "title": "Tiled Upscale - Megapixels of the result"
+    }
+  },
+  "4": {
+    "inputs": {
+      "text": "Restore the photo: remove blur, noise and compression artifacts and recover sharp, natural detail, keeping the same composition, people and colors."
+    },
+    "class_type": "AUSBOSS_NODES_Text",
+    "_meta": {
+      "title": "Text - The request"
+    }
+  },
+  "5": {
+    "inputs": {
+      "seed": 293749282416112
+    },
+    "class_type": "AUSBOSS_NODES_Seed",
+    "_meta": {
+      "title": "Seed"
+    }
+  },
+  "7": {
+    "inputs": {
+      "value": 25
+    },
+    "class_type": "AUSBOSS_NODES_Integer",
+    "_meta": {
+      "title": "Integer - Steps"
+    }
+  },
+  "8": {
+    "inputs": {
+      "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Text encoder"
+    }
+  },
+  "9": {
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "VAE"
+    }
+  },
+  "10": {
+    "inputs": {
+      "unet_name": "Qwen-2.1/qwen_image_2.1_bf16.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Diffusion model"
+    }
+  },
+  "11": {
+    "inputs": {
+      "loras": "[{\"id\":\"rmvyuld761\",\"name\":\"qwen-image-2.1-restore.safetensors\",\"strength\":1,\"strength_clip\":1,\"enabled\":true,\"triggers\":\"\"},{\"id\":\"rmvyuld762\",\"name\":\"Qwen-Image-2.1-viggle-turbo-v0.3-6step-lora-r128.safetensors\",\"strength\":1,\"strength_clip\":1,\"enabled\":false,\"triggers\":\"\"}]",
+      "trigger_separator": ", ",
+      "on_missing": "error",
+      "model": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "AUSBOSS_NODES_LoraLoader",
+    "_meta": {
+      "title": "LoRA Loader - Restore LoRA"
+    }
+  },
+  "14": {
+    "inputs": {},
+    "class_type": "AUSBOSS_NODES_RunTimer",
+    "_meta": {
+      "title": "Run Timer"
+    }
+  },
+  "38": {
+    "inputs": {
+      "image": "images.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "39": {
+    "inputs": {
+      "filename_prefix": "upscale_v01",
+      "images": [
+        "23:22",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "23:16": {
+    "inputs": {
+      "prompt": [
+        "4",
+        0
+      ],
+      "negative_prompt": "",
+      "resolution": 0,
+      "clip": [
+        "8",
+        0
+      ],
+      "images.image_1": [
+        "3",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImage21",
+    "_meta": {
+      "title": "Text Encode Qwen Image 2.1 - One tile and the request"
+    }
+  },
+  "23:17": {
+    "inputs": {
+      "device": "auto",
+      "dtype": "default",
+      "model": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "QwenImage21Cache",
+    "_meta": {
+      "title": "Reference cache"
+    }
+  },
+  "23:20": {
+    "inputs": {
+      "seed": [
+        "5",
+        0
+      ],
+      "steps": [
+        "7",
+        0
+      ],
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "23:17",
+        0
+      ],
+      "positive": [
+        "23:16",
+        0
+      ],
+      "negative": [
+        "23:16",
+        1
+      ],
+      "latent_image": [
+        "23:16",
+        2
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "Sampler - CFG 1, euler"
+    }
+  },
+  "23:21": {
+    "inputs": {
+      "samples": [
+        "23:20",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "Decode"
+    }
+  },
+  "23:22": {
+    "inputs": {
+      "keep_colors": 1,
+      "tiles": [
+        "23:21",
+        0
+      ],
+      "stitcher": [
+        "3",
+        1
+      ]
+    },
+    "class_type": "AUSBOSS_NODES_TiledUpscaleStitch",
+    "_meta": {
+      "title": "Tiled Upscale Stitch - Join the tiles"
+    }
+  },
+  "23:28": {
+    "inputs": {
+      "text": "Qwen reads one tile at its own size, together with the request.\n###### The same node sets the size of the redraw."
+    },
+    "class_type": "AUSBOSS_NODES_Callout",
+    "_meta": {
+      "title": "Callout"
+    }
+  },
+  "23:29": {
+    "inputs": {
+      "text": "Steps and seed come from the top level, CFG 1.\n###### The Restore LoRA is on the model, so the result stays close to your picture."
+    },
+    "class_type": "AUSBOSS_NODES_Callout",
+    "_meta": {
+      "title": "Callout"
+    }
+  },
+  "23:30": {
+    "inputs": {
+      "text": "Each tile is decoded and matched to its own tile's colors.\n###### Then the tiles are joined and fitted to the size you asked for."
+    },
+    "class_type": "AUSBOSS_NODES_Callout",
+    "_meta": {
+      "title": "Callout"
+    }
+  }
+}

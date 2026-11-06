@@ -21,6 +21,7 @@ import os
 import socket
 import sys
 import tempfile
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -180,10 +181,20 @@ COMP_ALPHA_REL = "Workflows/Comp/LTX_2.5_Alpha_Mate_V02.json"
 COMP_ALPHA_WORKFLOW = os.path.join(REPO_ROOT, COMP_ALPHA_REL).replace("\\", "/")
 COMP_ALPHA_LOAD = "9133"  # VHS_LoadVideo.video (Comp-98.mp4)
 COMP_ALPHA_SAVE = "9112"  # SaveVideo
-_COMP_WORKFLOW_NAMES = (
-    "DepthCrafter_Depth_V02.json",
-    "LTX_2.5_Alpha_Mate_V02.json",
-)
+IMAGE_UPSCALE_REL = "Workflows/Images/Image_upscale_Creative_V01.json"
+IMAGE_UPSCALE_WORKFLOW = os.path.join(REPO_ROOT, IMAGE_UPSCALE_REL).replace("\\", "/")
+IMAGE_UPSCALE_LOAD = "38"  # LoadImage
+IMAGE_UPSCALE_SAVE = "39"  # SaveImage
+IMAGE_IMI_REL = "Workflows/Images/Image_IMI_Upscale_V01.json"
+IMAGE_IMI_WORKFLOW = os.path.join(REPO_ROOT, IMAGE_IMI_REL).replace("\\", "/")
+IMAGE_IMI_LOAD = "129"  # LoadImage
+IMAGE_IMI_SAVE = "131"  # SaveImage
+_NESTED_WORKFLOW_DIRS = {
+    "DepthCrafter_Depth_V02.json": "Workflows/Comp",
+    "LTX_2.5_Alpha_Mate_V02.json": "Workflows/Comp",
+    "Image_upscale_Creative_V01.json": "Workflows/Images",
+    "Image_IMI_Upscale_V01.json": "Workflows/Images",
+}
 IMAGE_DESC_PROMPT_NODE = "4"
 IMAGE_DESC_LOAD_NODE = "5"
 IMAGE_DESC_OUTPUT_NODE = "12"
@@ -498,8 +509,9 @@ def _refresh_workflow_from_server(wf_path, timeout=60):
     root_norm = str(REPO_ROOT).replace("\\", "/").rstrip("/")
     if norm.startswith(root_norm + "/"):
         rels.append(norm[len(root_norm) + 1 :])
-    if rel in _COMP_WORKFLOW_NAMES:
-        rels.append("Workflows/Comp/%s" % rel)
+    nested = _NESTED_WORKFLOW_DIRS.get(rel)
+    if nested:
+        rels.append("%s/%s" % (nested, rel))
     rels.append("Workflows/%s" % rel)
     rels.append(rel)
     seen_rel = []
@@ -595,6 +607,86 @@ def _schedule_ms(delay_ms, fn):
         return True
     fn()
     return False
+
+
+def _defer_nuke_message(text):
+    """Open a note after this timer callback returns.
+
+    nuke.message() runs a nested event loop. Doing that in the same call that
+    creates a Read makes Nuke stop responding, then close.
+    """
+
+    def _show():
+        try:
+            if nuke is not None:
+                nuke.message(str(text or ""))
+        except Exception:
+            pass
+
+    if not _schedule_ms(400, _show):
+        _show()
+
+
+def _active_viewer_node_name():
+    if nuke is None:
+        return ""
+    try:
+        viewer = nuke.activeViewer()
+        if viewer is None:
+            return ""
+        node = viewer.node()
+        if node is None:
+            return ""
+        return node.name()
+    except Exception:
+        return ""
+
+
+def _restore_viewer(node_name):
+    if nuke is None or not node_name:
+        return
+    try:
+        node = nuke.toNode(node_name)
+        if node is not None:
+            nuke.connectViewer(0, node)
+    except Exception:
+        pass
+
+
+def _hub_lane_target(server_url):
+    """Hub proxy URL -> (hub base, server id). Direct ComfyUI URLs skip the line."""
+    url = str(server_url or "").strip().rstrip("/")
+    marker = "/comfyui-r/"
+    if marker in url:
+        base, sid = url.split(marker, 1)
+        sid = sid.split("/", 1)[0].strip()
+        if base and sid:
+            return base, sid
+    if url.endswith("/comfyui"):
+        return url[: -len("/comfyui")], "main"
+    return None, None
+
+
+def _arm_comfy_job(client, workflow, extra, first_ms=2000):
+    """Remember the job and wait on the hub line before POST /prompt."""
+    global _POLL_STATE
+    import time as _time
+
+    run_timeout = float((extra or {}).get("timeout") or 600.0)
+    state = dict(extra or {})
+    state["client"] = client
+    state["workflow"] = workflow
+    state["phase"] = "gate"
+    state["run_timeout"] = run_timeout
+    state["timeout"] = run_timeout + 7200.0
+    state["t0"] = _time.time()
+    state["prompt_id"] = ""
+    state["ticket"] = ""
+    state["queue_note"] = False
+    state["gate_log"] = ""
+    _POLL_STATE = state
+    _log("Waiting until this ComfyUI is free. You can keep working in Nuke.")
+    _schedule_ms(first_ms, _poll_comfy_tick)
 
 
 def _http_json(url, data=None, timeout=20):
@@ -763,11 +855,60 @@ def _project_output_dir(base, code):
     return path
 
 
+# Frozen when this script was loaded. Bootstrap sets it before import.
+_LOADED_PACKAGE = (os.environ.get("COMFYNUKE_PACKAGE_VERSION") or "").strip()
+
+_RELOAD_SCRIPT_MSG = "Reload the script.\nPix-Edit was updated."
+
+
+def _server_package_version():
+    """Hub package id, or empty when the check cannot reach the hub."""
+    base = (os.environ.get("COMFYNUKE_CODE_BASE") or _CODE_BASE or "").rstrip("/")
+    if not base:
+        return ""
+    req = urllib.request.Request(
+        base + "/version",
+        headers={"Cache-Control": "no-cache", "User-Agent": "ComfyNuke"},
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=8)
+        try:
+            raw = resp.read().decode("utf-8", "replace")
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+    except Exception as e:
+        _log("script version check skipped: %s" % e)
+        return ""
+    line = (raw or "").strip().splitlines()
+    return line[0].strip() if line else ""
+
+
+def _require_current_script():
+    """Stop the job when this Nuke is still running an older Pix-Edit script."""
+    server_ver = _server_package_version()
+    if not server_ver:
+        return True
+    if _LOADED_PACKAGE and _LOADED_PACKAGE == server_ver:
+        return True
+    _log(
+        "Pix-Edit package %s is not server %s — ask for a script reload"
+        % (_LOADED_PACKAGE or "(not loaded)", server_ver)
+    )
+    if nuke is not None:
+        nuke.message(_RELOAD_SCRIPT_MSG)
+    return False
+
+
 def _apply_project_gate(workflow, output_dir, project_code=None):
     """
     Return (canonical_code, output_dir) or None when the job must stop.
     Unticked workflows and R&D machines skip the code.
     """
+    if not _require_current_script():
+        return None
     try:
         policy = _project_policy(workflow)
     except Exception as e:
@@ -2964,19 +3105,18 @@ def _finish_job_ok(result, source_name, frame_i):
         src = _Dummy()
     read = _create_result_read(src, out_path, frame=frame_i)
     _log("New Read: %s → %s" % (read.name(), out_path))
-    try:
-        kind = "video" if out_path.lower().endswith(
-            (".mp4", ".webm", ".mov", ".mkv", ".avi", ".gif")
-        ) else "image"
-        nuke.message(
-            "ComfyUI done (%s).\n\n"
-            "New Read: %s\n%s\n\n"
-            "Previous results kept.\n"
-            "prompt_id: %s"
-            % (kind, read.name(), out_path, result.get("prompt_id"))
-        )
-    except Exception:
-        pass
+    kind = "video" if out_path.lower().endswith(
+        (".mp4", ".webm", ".mov", ".mkv", ".avi", ".gif")
+    ) else "image"
+    # Tell the artist after this callback returns. A message here, while the
+    # new Read is still being attached, hangs Nuke and then closes it.
+    _defer_nuke_message(
+        "ComfyUI done (%s).\n\n"
+        "New Read: %s\n%s\n\n"
+        "Previous results kept.\n"
+        "prompt_id: %s"
+        % (kind, read.name(), out_path, result.get("prompt_id"))
+    )
 
 
 def _wrap_sticky_label(text, words_per_line=10):
@@ -3025,10 +3165,7 @@ def _finish_job_sticky(text, st):
         note.setName("ComfyDescribe")
     except Exception:
         pass
-    try:
-        nuke.message("Image description done.\n\nStickyNote: %s" % note.name())
-    except Exception:
-        pass
+    _defer_nuke_message("Image description done.\n\nStickyNote: %s" % note.name())
 
 
 def _finish_job_err(err_msg):
@@ -3036,10 +3173,142 @@ def _finish_job_err(err_msg):
     _BG_JOB_ACTIVE = False
     _POLL_STATE = None
     _log("ERROR: %s" % err_msg)
+    _defer_nuke_message("ComfyUI error:\n%s" % err_msg)
+
+
+def _release_gate_and_queue(st, use_ticket=True):
+    """POST /prompt once the hub says this ComfyUI is free. Then poll history."""
+    import time as _time
+
+    client = st["client"]
+    workflow = st.get("workflow")
+    if not isinstance(workflow, dict):
+        _finish_job_err("Internal error: nothing to send")
+        return
+    ticket = st.get("ticket") if use_ticket else None
     try:
-        nuke.message("ComfyUI error:\n%s" % err_msg)
+        prompt_id = client.queue_prompt(workflow, queue_ticket=ticket or None)
+    except Exception as e:
+        text = str(e)
+        low = text.lower()
+        if use_ticket and ("409" in text or "429" in text or "not your turn" in low or "still busy" in low):
+            if "not valid" in low:
+                st["ticket"] = ""
+            st["phase"] = "gate"
+            _log("ComfyUI line moved — waiting again")
+            _schedule_ms(2000, _poll_comfy_tick)
+            return
+        _finish_job_err(text)
+        return
+    st["prompt_id"] = prompt_id
+    st["phase"] = "run"
+    st["t0"] = _time.time()
+    st["timeout"] = float(st.get("run_timeout") or 600.0)
+    try:
+        del st["workflow"]
     except Exception:
-        pass
+        st["workflow"] = None
+    _log("prompt_id=%s" % prompt_id)
+    _schedule_ms(2000, _poll_comfy_tick)
+
+
+def _poll_gate_tick():
+    """Ask the hub if this ComfyUI is free. Nuke stays usable while we wait."""
+    global _POLL_STATE
+    st = _POLL_STATE
+    if not st or st.get("phase") != "gate":
+        return
+    import time as _time
+
+    elapsed = _time.time() - float(st.get("t0") or _time.time())
+    timeout = float(st.get("timeout") or 0)
+    if elapsed > timeout:
+        _finish_job_err(
+            "Timeout after %.0fs waiting for a free ComfyUI" % elapsed
+        )
+        return
+    client = st.get("client")
+    try:
+        base, sid = _hub_lane_target(getattr(client, "server", "") or "")
+        if not base:
+            _log("This server is not the hub line — sending the job now")
+            _release_gate_and_queue(st, use_ticket=False)
+            return
+        if not st.get("ticket"):
+            info = _http_json(
+                base.rstrip("/") + "/comfy-queue/join",
+                data={
+                    "server_id": sid,
+                    "workflow": os.path.basename(
+                        getattr(client, "workflow_path", "") or ""
+                    ),
+                    "artist": socket.gethostname(),
+                },
+                timeout=8,
+            )
+            if not isinstance(info, dict) or not info.get("ok") or not info.get("ticket"):
+                err = ""
+                if isinstance(info, dict):
+                    err = str(info.get("error") or "")
+                raise RuntimeError(err or "could not join the ComfyUI line")
+            st["ticket"] = str(info.get("ticket") or "")
+            _log("Joined the line for %s" % sid)
+        info = _http_json(
+            base.rstrip("/")
+            + "/comfy-queue/status?ticket="
+            + urllib.parse.quote(str(st.get("ticket") or "")),
+            timeout=8,
+        )
+        if not isinstance(info, dict) or not info.get("ok"):
+            raise RuntimeError("bad queue status")
+        state = str(info.get("state") or "")
+        try:
+            pos = int(info.get("position") or 0)
+        except Exception:
+            pos = 0
+        try:
+            queue_size = int(info.get("queue_size") or 0)
+        except Exception:
+            queue_size = 0
+        if state in ("gone", "unknown", ""):
+            st["ticket"] = ""
+            st["queue_note"] = False
+            _log("Queue ticket ended — rejoining the line")
+            _schedule_ms(2000, _poll_comfy_tick)
+            return
+        if state == "ready":
+            _log("ComfyUI is free — sending the job")
+            _release_gate_and_queue(st, use_ticket=True)
+            return
+        log_key = "wait:%s:%s" % (pos, queue_size)
+        if st.get("gate_log") != log_key:
+            st["gate_log"] = log_key
+            _log(
+                "ComfyUI is busy. You are waiting. Queue number %s of %s."
+                % (pos, queue_size)
+            )
+        if queue_size >= 10 and not st.get("queue_note"):
+            st["queue_note"] = True
+            shown = pos if pos > 0 else queue_size
+            _defer_nuke_message(
+                "You are waiting.\n"
+                "Your queue number is %s.\n\n"
+                "ComfyUI is running another job. "
+                "You can close this note and keep working. "
+                "Your job will send when it is your turn." % shown
+            )
+        _schedule_ms(2000, _poll_comfy_tick)
+    except Exception as e:
+        err = str(e)
+        if "404" in err or "Not Found" in err:
+            _log("Hub has no wait line yet — sending the job now")
+            try:
+                _release_gate_and_queue(st, use_ticket=False)
+            except Exception as e2:
+                _finish_job_err(str(e2))
+            return
+        _log("queue check retry (%.0fs): %s" % (elapsed, e))
+        _schedule_ms(2000, _poll_comfy_tick)
 
 
 def _poll_comfy_tick():
@@ -3051,9 +3320,15 @@ def _poll_comfy_tick():
     st = _POLL_STATE
     if not st:
         return
+    if st.get("phase") == "gate":
+        _poll_gate_tick()
+        return
 
     client = st["client"]
-    prompt_id = st["prompt_id"]
+    prompt_id = st.get("prompt_id") or ""
+    if not prompt_id:
+        _finish_job_err("Internal error: job has no prompt id")
+        return
     t0 = st["t0"]
     timeout = st.get("timeout", 600.0)
     import time as _time
@@ -3472,8 +3747,9 @@ def run_edit_on_node(
             _log("mask  file → node %s: %s" % (client.id_load_mask, mask_name))
         _log("Prompt text → node %s: %s" % (client.id_prompt, prompt_s[:120]))
         _log("Queueing Comfy job…")
-        prompt_id = client.queue_prompt(wf)
-        _log("prompt_id=%s" % prompt_id)
+        if not background:
+            prompt_id = client.queue_prompt(wf)
+            _log("prompt_id=%s" % prompt_id)
     except Exception as e:
         _BG_JOB_ACTIVE = False
         _log("ERROR: %s" % e)
@@ -3505,23 +3781,22 @@ def run_edit_on_node(
             _finish_job_err(str(e))
             raise
 
-    # --- Phase 3: non-blocking poll via QTimer (main thread) ---
-    import time as _time
-
-    _POLL_STATE = {
-        "client": client,
-        "prompt_id": prompt_id,
-        "t0": _time.time(),
-        "timeout": 600.0,
-        "out_dir": out_dir,
-        "node_name": node_name,
-        "frame": frame,
-        "seed": seed,
-        "stamp": stamp,
-        "method": method,
-    }
-    _log("Comfy queued — keep working in Nuke. Progress in this log only.")
-    _schedule_ms(2000, _poll_comfy_tick)
+    # --- Phase 3: wait for a free ComfyUI, then poll on the main thread ---
+    _arm_comfy_job(
+        client,
+        wf,
+        {
+            "timeout": 600.0,
+            "out_dir": out_dir,
+            "node_name": node_name,
+            "frame": frame,
+            "seed": seed,
+            "stamp": stamp,
+            "method": method,
+        },
+        first_ms=2000,
+    )
+    _log("Edit is in the ComfyUI line — keep working. Progress in this log only.")
     return None
 
 
@@ -3990,13 +4265,42 @@ def _apply_video_read_range(read, out_path):
     return first, last
 
 
+def _set_result_colorspace(read, out_path):
+    """One colorspace write. A long OCIO trial loop decodes the new plate on the GUI thread."""
+    low = out_path.lower()
+    if low.endswith(".exr"):
+        name = "linear"
+    elif low.endswith((".png", ".jpg", ".jpeg", ".webp")):
+        name = "sRGB"
+    else:
+        return
+    try:
+        if "raw" in read.knobs():
+            read["raw"].setValue(False)
+    except Exception:
+        pass
+    for key in ("colorspace", "ocio_colorspace"):
+        if key not in read.knobs():
+            continue
+        try:
+            read[key].setValue(name)
+            _log("Read colorspace → %s (%s)" % (name, key))
+        except Exception as e:
+            _log("Read colorspace skipped: %s" % e)
+        return
+
+
 def _create_result_read(source_node, out_path, frame=1):
     """
     Create a new Read for this generation only.
     Names: ComfyEdit_Result_001, _002, ... — never reuses an existing Read file path.
     Stacks to the right of previous ComfyEdit_Result_* nodes.
     Videos: full duration range + media resolution (not 1-frame hold).
+
+    The new Read must not become the Viewer input. A selected Read plus reload
+    plus a popup in the same timer tick hangs Nuke and then closes it.
     """
+    viewer_name = _active_viewer_node_name()
     # Next index among existing ComfyEdit_Result_* nodes
     idx = 1
     existing = []
@@ -4016,6 +4320,11 @@ def _create_result_read(source_node, out_path, frame=1):
                 idx = max(idx, len(existing) + 1)
 
     read = nuke.createNode("Read", inpanel=False)
+    try:
+        read.setSelected(False)
+    except Exception:
+        pass
+    _restore_viewer(viewer_name)
     base_name = "ComfyEdit_Result_%03d" % idx
     try:
         read.setName(base_name)
@@ -4026,85 +4335,42 @@ def _create_result_read(source_node, out_path, frame=1):
         except Exception:
             pass
 
+    # Postage stamp decodes the file on the GUI thread as soon as the path is set.
+    try:
+        if "postage_stamp" in read.knobs():
+            read["postage_stamp"].setValue(False)
+    except Exception:
+        pass
+
     read["file"].setValue(out_path)
+    _restore_viewer(viewer_name)
     is_video = out_path.lower().endswith(
         (".mp4", ".webm", ".mov", ".mkv", ".avi", ".gif")
     )
     if is_video:
         _apply_video_read_range(read, out_path)
+        _restore_viewer(viewer_name)
     else:
-        # Stills: pin first/last to current frame so it holds on that frame
+        # Stills: pin first/last to the current frame. Do not reload — reload
+        # decodes the whole returned image on the GUI thread.
         try:
             f = int(frame)
-            if "first" in read.knobs():
-                read["first"].setValue(f)
-            if "last" in read.knobs():
-                read["last"].setValue(f)
             if "origfirst" in read.knobs():
                 read["origfirst"].setValue(f)
             if "origlast" in read.knobs():
                 read["origlast"].setValue(f)
-        except Exception:
-            pass
-        try:
-            if "reload" in read.knobs():
-                read["reload"].execute()
+            if "first" in read.knobs():
+                read["first"].setValue(f)
+            if "last" in read.knobs():
+                read["last"].setValue(f)
         except Exception:
             pass
 
-    # Colorspace: EXR → scene-linear; PNG/JPG from Comfy → sRGB display-referred
     try:
-        low = out_path.lower()
-        if low.endswith(".exr"):
-            if "raw" in read.knobs():
-                try:
-                    read["raw"].setValue(False)
-                except Exception:
-                    pass
-            for key in ("colorspace", "ocio_colorspace"):
-                if key not in read.knobs():
-                    continue
-                for name in (
-                    "linear",
-                    "scene_linear",
-                    "Linear",
-                    "ACES - ACEScg",
-                    "Utility - Linear - sRGB",
-                    "default (linear)",
-                ):
-                    try:
-                        read[key].setValue(name)
-                        _log("Read colorspace → %s (%s)" % (name, key))
-                        break
-                    except Exception:
-                        continue
-                break
-        elif low.endswith((".png", ".jpg", ".jpeg", ".webp")):
-            if "raw" in read.knobs():
-                try:
-                    read["raw"].setValue(False)
-                except Exception:
-                    pass
-            for key in ("colorspace", "ocio_colorspace"):
-                if key not in read.knobs():
-                    continue
-                for name in (
-                    "sRGB",
-                    "srgb",
-                    "Output - sRGB",
-                    "Utility - sRGB - Texture",
-                    "default (sRGB)",
-                    "Gamma2.2",
-                ):
-                    try:
-                        read[key].setValue(name)
-                        _log("Read colorspace → %s (%s) [png/jpg]" % (name, key))
-                        break
-                    except Exception:
-                        continue
-                break
-    except Exception:
-        pass
+        _set_result_colorspace(read, out_path)
+    except Exception as e:
+        _log("Read colorspace skipped: %s" % e)
+    _restore_viewer(viewer_name)
 
     # Place: to the right of source, offset down by how many results already exist
     try:
@@ -4136,6 +4402,17 @@ def _create_result_read(source_node, out_path, frame=1):
         read.setSelected(False)
     except Exception:
         pass
+    _restore_viewer(viewer_name)
+
+    # Properties → Node → postage stamp. Turn it on only after the file is
+    # set and the Viewer is back on the previous node.
+    try:
+        if "postage_stamp" in read.knobs():
+            read["postage_stamp"].setValue(True)
+            _log("Postage stamp on %s" % read.name())
+    except Exception as e:
+        _log("Postage stamp skipped: %s" % e)
+    _restore_viewer(viewer_name)
 
     return read
 
@@ -4855,8 +5132,6 @@ def schedule_image_gen(
             pass
 
         _log("Queueing text-to-image job…")
-        prompt_id = client.queue_prompt(wf)
-        _log("prompt_id=%s" % prompt_id)
     except Exception as e:
         _BG_JOB_ACTIVE = False
         client = None
@@ -4867,26 +5142,22 @@ def schedule_image_gen(
             pass
         return
 
-    import time as _time
-
-    _POLL_STATE = {
-        "client": client,
-        "prompt_id": prompt_id,
-        "t0": _time.time(),
-        "timeout": 600.0,
-        "out_dir": out_dir,
-        "node_name": node_name or "ImageGen",
-        # Still holds on frame 1 so result is visible without scrubbing
-        "frame": 1,
-        "seed": seed,
-        "stamp": stamp,
-        "method": "txt2img",
-    }
-    _log(
-        "Image Gen queued (stamp=%s) — keep working. Progress in this log only."
-        % stamp
+    _arm_comfy_job(
+        client,
+        wf,
+        {
+            "timeout": 600.0,
+            "out_dir": out_dir,
+            "node_name": node_name or "ImageGen",
+            # Still holds on frame 1 so result is visible without scrubbing
+            "frame": 1,
+            "seed": seed,
+            "stamp": stamp,
+            "method": "txt2img",
+        },
+        first_ms=2000,
     )
-    _schedule_ms(2000, _poll_comfy_tick)
+    _log("Image Gen is in the line (stamp=%s) — keep working." % stamp)
 
 
 def show_image_gen_panel():
@@ -5173,8 +5444,6 @@ def schedule_image_to_video(
             filename_prefix=prefix,
         )
         _log("Queueing image-to-video job…")
-        prompt_id = client.queue_prompt(wf)
-        _log("prompt_id=%s" % prompt_id)
     except Exception as e:
         _BG_JOB_ACTIVE = False
         _log("ERROR: %s" % e)
@@ -5184,22 +5453,21 @@ def schedule_image_to_video(
             pass
         return
 
-    import time as _time
-
-    _POLL_STATE = {
-        "client": client,
-        "prompt_id": prompt_id,
-        "t0": _time.time(),
-        "timeout": 1800.0,
-        "out_dir": out_dir,
-        "node_name": node_name,
-        "frame": frame,
-        "seed": seed,
-        "stamp": stamp,
-        "method": "i2v",
-    }
-    _log("Image→Video queued — keep working in Nuke. Progress in this log only.")
-    _schedule_ms(3000, _poll_comfy_tick)
+    _arm_comfy_job(
+        client,
+        wf,
+        {
+            "timeout": 1800.0,
+            "out_dir": out_dir,
+            "node_name": node_name,
+            "frame": frame,
+            "seed": seed,
+            "stamp": stamp,
+            "method": "i2v",
+        },
+        first_ms=3000,
+    )
+    _log("Image→Video is in the line — keep working in Nuke.")
 
 
 def show_image_to_video_panel():
@@ -5396,8 +5664,6 @@ def schedule_image_description(
         _log("Prompt text → node %s: %s" % (IMAGE_DESC_PROMPT_NODE, prompt_s[:120]))
         _log("LoadImage node %s / text capture node %s" % (IMAGE_DESC_LOAD_NODE, text_node))
         _log("Queueing image-description job…")
-        prompt_id = client.queue_prompt(wf)
-        _log("prompt_id=%s" % prompt_id)
     except Exception as e:
         _BG_JOB_ACTIVE = False
         _log("ERROR: %s" % e)
@@ -5407,23 +5673,22 @@ def schedule_image_description(
             pass
         return
 
-    import time as _time
-
-    _POLL_STATE = {
-        "client": client,
-        "prompt_id": prompt_id,
-        "t0": _time.time(),
-        "timeout": 300.0,
-        "out_dir": DEFAULT_OUT,
-        "node_name": node.name(),
-        "frame": frame,
-        "stamp": stamp,
-        "mode": "describe",
-        "text_node": text_node,
-        "method": "describe",
-    }
-    _log("Describe queued — keep working. Result will land on a StickyNote.")
-    _schedule_ms(2000, _poll_comfy_tick)
+    _arm_comfy_job(
+        client,
+        wf,
+        {
+            "timeout": 300.0,
+            "out_dir": DEFAULT_OUT,
+            "node_name": node.name(),
+            "frame": frame,
+            "stamp": stamp,
+            "mode": "describe",
+            "text_node": text_node,
+            "method": "describe",
+        },
+        first_ms=2000,
+    )
+    _log("Describe is in the line — keep working. Result will land on a StickyNote.")
 
 
 def schedule_image_outpaint(
@@ -5548,8 +5813,6 @@ def schedule_image_outpaint(
         _log("Prompt → node %s: %s" % (IMAGE_OUTPAINT_PROMPT, prompt_s[:160]))
         _log("SaveImageAdvanced node %s" % IMAGE_OUTPAINT_SAVE)
         _log("Server %s" % server)
-        prompt_id = client.queue_prompt(wf)
-        _log("prompt_id=%s" % prompt_id)
     except Exception as e:
         _BG_JOB_ACTIVE = False
         _log("ERROR: %s" % e)
@@ -5559,22 +5822,21 @@ def schedule_image_outpaint(
             pass
         return
 
-    import time as _time
-
-    _POLL_STATE = {
-        "client": client,
-        "prompt_id": prompt_id,
-        "t0": _time.time(),
-        "timeout": 900.0,
-        "out_dir": out_dir,
-        "node_name": node.name(),
-        "frame": frame,
-        "seed": seed,
-        "stamp": stamp,
-        "method": "outpaint",
-    }
-    _log("Outpaint queued — keep working. A new Read appears when it finishes.")
-    _schedule_ms(2000, _poll_comfy_tick)
+    _arm_comfy_job(
+        client,
+        wf,
+        {
+            "timeout": 900.0,
+            "out_dir": out_dir,
+            "node_name": node.name(),
+            "frame": frame,
+            "seed": seed,
+            "stamp": stamp,
+            "method": "outpaint",
+        },
+        first_ms=2000,
+    )
+    _log("Outpaint is in the line — keep working. A new Read appears when it finishes.")
 
 
 def show_image_outpaint_panel():
@@ -5860,8 +6122,6 @@ def schedule_comp_depth(
         client._last_filename_prefix = prefix
         _log("%s — video node %s = %s" % (label, load_id, remote))
         _log("Queueing %s…" % label)
-        prompt_id = client.queue_prompt(wf)
-        _log("prompt_id=%s" % prompt_id)
     except Exception as e:
         _BG_JOB_ACTIVE = False
         _log("ERROR: %s" % e)
@@ -5871,22 +6131,21 @@ def schedule_comp_depth(
             pass
         return
 
-    import time as _time
-
-    _POLL_STATE = {
-        "client": client,
-        "prompt_id": prompt_id,
-        "t0": _time.time(),
-        "timeout": 3600.0,
-        "out_dir": out_dir,
-        "node_name": node_name,
-        "frame": frame,
-        "seed": None,
-        "stamp": stamp,
-        "method": stamp_key,
-    }
-    _log("%s queued — keep working. A new Read appears when the video is back." % label)
-    _schedule_ms(3000, _poll_comfy_tick)
+    _arm_comfy_job(
+        client,
+        wf,
+        {
+            "timeout": 3600.0,
+            "out_dir": out_dir,
+            "node_name": node_name,
+            "frame": frame,
+            "seed": None,
+            "stamp": stamp,
+            "method": stamp_key,
+        },
+        first_ms=3000,
+    )
+    _log("%s is in the line — keep working. A new Read appears when the video is back." % label)
 
 
 def show_comp_depth_panel():
@@ -6010,6 +6269,271 @@ def show_comp_alpha_panel():
     )
 
 
+def schedule_image_upscale_creative(
+    node=None,
+    server=DEFAULT_SERVER,
+    workflow=None,
+    output_dir=DEFAULT_OUT,
+    frame=None,
+    project_code="",
+    load_id=None,
+    save_id=None,
+    label="Image Upscale Creative",
+    stamp_key="upscale",
+    client_prefix="nuke-upscale",
+    default_workflow=None,
+):
+    """
+    Pix-Edit > Image upscale.
+    Renders the selected node (Read, Crop, Transform, Blur, Reformat, or any
+    other image node) and uploads that PNG. Save image comes back as a Read.
+    """
+    global _BG_JOB_ACTIVE, _POLL_STATE
+
+    if nuke is None:
+        raise RuntimeError("Must run inside Nuke")
+
+    ComfyClient, ComfyError = _get_client()
+
+    if node is None:
+        nodes = nuke.selectedNodes()
+        if not nodes:
+            nuke.message(
+                "Select the node whose picture you want to send.\n"
+                "Read, Crop, Transform, Blur, Reformat, Merge, or any other image node."
+            )
+            return
+        node = nodes[0]
+    if isinstance(node, str):
+        n = nuke.toNode(node)
+        if n is None:
+            nuke.message("Node gone: %s" % node)
+            return
+        node = n
+
+    if _BG_JOB_ACTIVE or ComfyClient.is_busy() or _POLL_STATE is not None:
+        nuke.message(
+            "A Comfy job is already running in this Nuke session. Wait for it."
+        )
+        return
+
+    load_id = str(load_id or IMAGE_UPSCALE_LOAD)
+    save_id = str(save_id or IMAGE_UPSCALE_SAVE)
+    wf_path = workflow or default_workflow or IMAGE_UPSCALE_WORKFLOW
+    server = resolve_server_for_workflow(wf_path, fallback=server or DEFAULT_SERVER)
+    try:
+        wf_path = _refresh_workflow_from_server(wf_path)
+    except Exception as e:
+        if not os.path.isfile(wf_path):
+            nuke.message("Workflow not found / cannot refresh:\n%s\n%s" % (wf_path, e))
+            return
+        _log("%s — workflow refresh failed, trying local: %s" % (label, e))
+    if not os.path.isfile(wf_path):
+        nuke.message("Workflow not found:\n%s" % wf_path)
+        return
+
+    if frame is None:
+        frame = int(nuke.frame())
+    out_dir = output_dir or DEFAULT_OUT
+    gated = _apply_project_gate(wf_path, out_dir, project_code)
+    if gated is None:
+        return
+    project_code, out_dir = gated
+    os.makedirs(out_dir, exist_ok=True)
+
+    _BG_JOB_ACTIVE = True
+    try:
+        import time as _time
+        import socket as _socket
+        import copy
+
+        _ensure_temp_dir()
+        shot = os.path.join(TEMP_DIR, "image_node.png")
+        # Writes the selected node itself: Crop box, Transform, Blur, Reformat, etc.
+        in_path, _cs, method = write_visible_frame_png(node, frame, shot)
+        try:
+            cls = node.Class()
+        except Exception:
+            cls = "?"
+        host = _socket.gethostname().replace(" ", "_")
+        stamp = "%s_%s_%s" % (
+            stamp_key,
+            _time.strftime("%Y%m%d_%H%M%S"),
+            uuid.uuid4().hex[:8],
+        )
+        client = ComfyClient(
+            server=server,
+            workflow_path=wf_path,
+            timeout_sec=900.0,
+            poll_interval_sec=2.0,
+            client_id="%s-%s-%s" % (client_prefix, host, stamp),
+        )
+        client.project_code = project_code or ""
+        client.load_workflow()
+        wf = copy.deepcopy(client._workflow_template)
+        if load_id not in wf or save_id not in wf:
+            raise ComfyError(
+                "%s graph is missing node %s (image in) or %s (image out)."
+                % (label, load_id, save_id)
+            )
+        remote = client.upload_image(in_path, remote_name="%s.png" % stamp)
+        wf[load_id].setdefault("inputs", {})["image"] = remote
+        prefix = "nuke/%s/%s" % (host, stamp)
+        wf[save_id].setdefault("inputs", {})["filename_prefix"] = prefix
+        client.id_save = save_id
+        client._last_filename_prefix = prefix
+        _log(
+            "%s — %s (%s) → LoadImage %s = %s (%s)"
+            % (label, node.name(), cls, load_id, remote, method)
+        )
+    except Exception as e:
+        _BG_JOB_ACTIVE = False
+        _log("ERROR: %s" % e)
+        try:
+            nuke.message("ComfyUI %s error:\n%s" % (label, e))
+        except Exception:
+            pass
+        return
+
+    _arm_comfy_job(
+        client,
+        wf,
+        {
+            "timeout": 900.0,
+            "out_dir": out_dir,
+            "node_name": node.name(),
+            "frame": frame,
+            "seed": None,
+            "stamp": stamp,
+            "method": stamp_key,
+        },
+        first_ms=2000,
+    )
+    _log("%s is in the line — keep working. A new Read appears when it is done." % label)
+
+
+def show_image_upscale_creative_panel():
+    """Pix-Edit > Image > Image Upscale Creative."""
+    if nuke is None:
+        raise RuntimeError("Must run inside Nuke")
+
+    import nukescripts  # type: ignore
+
+    class ImageUpscalePanel(nukescripts.PythonPanel):
+        def __init__(self):
+            nukescripts.PythonPanel.__init__(self, "Image — Upscale Creative")
+            self.server = nuke.String_Knob("server", "Server")
+            self.workflow = nuke.File_Knob("workflow", "Workflow")
+            self.workflow.setValue(IMAGE_UPSCALE_WORKFLOW)
+            self.server.setValue(
+                resolve_server_for_workflow(
+                    IMAGE_UPSCALE_WORKFLOW, fallback=DEFAULT_SERVER
+                )
+            )
+            self.out_dir = nuke.String_Knob("output_dir", "Output dir")
+            self.out_dir.setValue(DEFAULT_OUT)
+            self.project_code = nuke.String_Knob("project_code", "Project code")
+            self.project_code.setValue(_remembered_project_code())
+            self.help_txt = nuke.Text_Knob(
+                "help_txt",
+                "",
+                "<b>Select any image node</b> — Read, Crop, Transform, Blur, Reformat, Merge.<br>"
+                "That node’s current frame uploads to Load Image node <b>38</b>. "
+                "Save Image node <b>39</b> comes back as a new Read.<br>"
+                "Runs on <b>192.168.91.12:8166</b>.",
+            )
+            for k in (
+                self.server,
+                self.workflow,
+                self.project_code,
+                self.out_dir,
+                self.help_txt,
+            ):
+                self.addKnob(k)
+
+    sel = nuke.selectedNodes()
+    node = sel[0] if sel else None
+    frame = int(nuke.frame())
+    p = ImageUpscalePanel()
+    if not p.showModalDialog():
+        _log("Image Upscale Creative cancelled")
+        return
+    if node is None:
+        sel = nuke.selectedNodes()
+        node = sel[0] if sel else None
+    schedule_image_upscale_creative(
+        node=node,
+        server=p.server.value().strip(),
+        workflow=p.workflow.value(),
+        output_dir=p.out_dir.value() or DEFAULT_OUT,
+        frame=frame,
+        project_code=p.project_code.value(),
+    )
+
+
+def show_image_imi_upscale_panel():
+    """Pix-Edit > Image > Image IMI Upscale. Any selected node, nodes 129 and 131."""
+    if nuke is None:
+        raise RuntimeError("Must run inside Nuke")
+
+    import nukescripts  # type: ignore
+
+    class ImageImiPanel(nukescripts.PythonPanel):
+        def __init__(self):
+            nukescripts.PythonPanel.__init__(self, "Image — IMI Upscale")
+            self.server = nuke.String_Knob("server", "Server")
+            self.workflow = nuke.File_Knob("workflow", "Workflow")
+            self.workflow.setValue(IMAGE_IMI_WORKFLOW)
+            self.server.setValue(
+                resolve_server_for_workflow(IMAGE_IMI_WORKFLOW, fallback=DEFAULT_SERVER)
+            )
+            self.out_dir = nuke.String_Knob("output_dir", "Output dir")
+            self.out_dir.setValue(DEFAULT_OUT)
+            self.project_code = nuke.String_Knob("project_code", "Project code")
+            self.project_code.setValue(_remembered_project_code())
+            self.help_txt = nuke.Text_Knob(
+                "help_txt",
+                "",
+                "<b>Select any image node</b> — Read, Crop, Transform, Blur, Reformat, Merge.<br>"
+                "Nuke renders that node, then uploads it to Load Image <b>129</b>. "
+                "Save Image <b>131</b> comes back as a new Read.<br>"
+                "Runs on <b>192.168.91.12:8166</b>.",
+            )
+            for k in (
+                self.server,
+                self.workflow,
+                self.project_code,
+                self.out_dir,
+                self.help_txt,
+            ):
+                self.addKnob(k)
+
+    sel = nuke.selectedNodes()
+    node = sel[0] if sel else None
+    frame = int(nuke.frame())
+    p = ImageImiPanel()
+    if not p.showModalDialog():
+        _log("Image IMI Upscale cancelled")
+        return
+    if node is None:
+        sel = nuke.selectedNodes()
+        node = sel[0] if sel else None
+    schedule_image_upscale_creative(
+        node=node,
+        server=p.server.value().strip(),
+        workflow=p.workflow.value(),
+        output_dir=p.out_dir.value() or DEFAULT_OUT,
+        frame=frame,
+        project_code=p.project_code.value(),
+        load_id=IMAGE_IMI_LOAD,
+        save_id=IMAGE_IMI_SAVE,
+        label="Image IMI Upscale",
+        stamp_key="imi",
+        client_prefix="nuke-imi",
+        default_workflow=IMAGE_IMI_WORKFLOW,
+    )
+
+
 def register_menu():
     if nuke is None:
         return
@@ -6031,11 +6555,14 @@ def register_menu():
     comp = m.addMenu("Comp")
     comp.addCommand("DepthCrafter Depth...", show_comp_depth_panel)
     comp.addCommand("Video Alpha Mate...", show_comp_alpha_panel)
+    images = m.addMenu("Image")
+    images.addCommand("Image Upscale Creative...", show_image_upscale_creative_panel)
+    images.addCommand("Image IMI Upscale...", show_image_imi_upscale_panel)
     m.addCommand("Ping Server", ping_server)
     m.addCommand("Prompt Examples...", show_prompt_examples_panel)
 
     nuke.tprint(
-        "[Pix-Edit] Menu OK — Edit / Hi-res / Ref Hi-res / Gen / Outpaint / Describe / I2V / Comp / Ping | "
+        "[Pix-Edit] Menu OK — Edit / Hi-res / Ref Hi-res / Gen / Outpaint / Describe / I2V / Comp / Image / Ping | "
         "server=%s root=%s workflow=%s"
         % (DEFAULT_SERVER, REPO_ROOT, os.path.basename(DEFAULT_WORKFLOW))
     )

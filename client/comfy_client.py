@@ -71,6 +71,10 @@ def _nuke_tool_from_filename(name: str) -> str:
         return "Image Gen"
     if "outpaint" in b:
         return "Image Outpaint"
+    if "imi" in b and "upscale" in b:
+        return "Image IMI Upscale"
+    if "upscale" in b and "creative" in b:
+        return "Image Upscale Creative"
     if "upscale" in b:
         return "Image Upscale"
     if "depthcrafter" in b or "depth_crafter" in b:
@@ -360,13 +364,21 @@ class ComfyClient:
         raw = self._request("GET", path, query=query, timeout=30)
         return json.loads(raw.decode("utf-8"))
 
-    def _post_json(self, path: str, payload: Dict[str, Any]) -> Any:
+    def _post_json(
+        self,
+        path: str,
+        payload: Dict[str, Any],
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Any:
         data = json.dumps(payload).encode("utf-8")
+        hdrs = {"Content-Type": "application/json"}
+        if headers:
+            hdrs.update(headers)
         raw = self._request(
             "POST",
             path,
             data=data,
-            headers={"Content-Type": "application/json"},
+            headers=hdrs,
             timeout=60,
         )
         return json.loads(raw.decode("utf-8"))
@@ -1123,7 +1135,7 @@ class ComfyClient:
             _JOB_BUSY = False
             _JOB_LOCK.release()
 
-    def queue_prompt(self, workflow: Dict[str, Any]) -> str:
+    def queue_prompt(self, workflow: Dict[str, Any], queue_ticket: Optional[str] = None) -> str:
         wf_name = Path(self.workflow_path or "").name
         payload = {
             "prompt": workflow,
@@ -1134,7 +1146,14 @@ class ComfyClient:
                 "project_code": str(getattr(self, "project_code", "") or "").strip(),
             },
         }
-        result = self._post_json("/prompt", payload)
+        hdrs = {}
+        ticket = str(queue_ticket or "").strip()
+        if ticket:
+            hdrs["X-ComfyNuke-Ticket"] = ticket
+        build = str(getattr(self, "script_build", "") or os.environ.get("COMFYNUKE_PACKAGE_VERSION") or "").strip()
+        if build:
+            hdrs["X-ComfyNuke-Build"] = build
+        result = self._post_json("/prompt", payload, headers=hdrs or None)
         if "error" in result:
             raise ComfyError(f"Queue error: {json.dumps(result)[:2000]}")
         if "node_errors" in result and result["node_errors"]:

@@ -213,6 +213,8 @@ CORE_NUKE_TOOLS = (
     "Image to Video",
     "Comp Depth",
     "Video Alpha Mate",
+    "Image Upscale Creative",
+    "Image IMI Upscale",
 )
 
 
@@ -241,6 +243,10 @@ def nuke_tool_from_filename(name: str) -> str:
         return "Image Gen"
     if "outpaint" in b:
         return "Image Outpaint"
+    if "imi" in b and "upscale" in b:
+        return "Image IMI Upscale"
+    if "upscale" in b and "creative" in b:
+        return "Image Upscale Creative"
     if "upscale" in b:
         return "Image Upscale"
     if "depthcrafter" in b or "depth_crafter" in b:
@@ -279,6 +285,10 @@ def infer_nuke_tool(
         return "Image Gen"
     if "nuke-outpaint" in blob or "outpaint" in blob:
         return "Image Outpaint"
+    if "nuke-imi" in blob or "imi_upscale" in blob:
+        return "Image IMI Upscale"
+    if "nuke-upscale" in blob or "upscale_creative" in blob:
+        return "Image Upscale Creative"
     if "nuke-alpha" in blob or "alpha_mate" in blob or "alphamate" in blob:
         return "Video Alpha Mate"
     if "nuke-comp" in blob or "depthcrafter" in blob:
@@ -562,6 +572,56 @@ class UsageLog:
                 if len(out) >= max(1, min(int(limit or 50), 200)):
                     break
         return out
+
+    def set_project_on_prompt(self, prompt_id: str, project_code: str, *, by_user: str = "") -> Dict[str, Any]:
+        """Write a project code onto every log line for one ComfyUI prompt id."""
+        hits = self.find_by_prompt_id(prompt_id, limit=200)
+        ids: List[str] = []
+        for r in hits:
+            pid = str(r.get("prompt_id") or "")
+            if pid and pid not in ids:
+                ids.append(pid)
+        if not ids:
+            raise ValueError("No usage-log job matches that id")
+        if len(ids) > 1:
+            raise ValueError("More than one job matches. Paste the full prompt id.")
+        full = ids[0]
+        code = str(project_code or "").strip()
+        updated = 0
+        with self._lock:
+            try:
+                lines = self.path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except Exception:
+                lines = []
+            new_lines: List[str] = []
+            for line in lines:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except Exception:
+                    new_lines.append(raw)
+                    continue
+                if isinstance(rec, dict) and str(rec.get("prompt_id") or "") == full:
+                    rec["project_code"] = code
+                    updated += 1
+                    new_lines.append(json.dumps(rec, ensure_ascii=False, separators=(",", ":")))
+                else:
+                    new_lines.append(raw)
+            tmp = self.path.with_suffix(".jsonl.tmp")
+            tmp.write_text(("\n".join(new_lines) + ("\n" if new_lines else "")), encoding="utf-8")
+            os.replace(str(tmp), str(self.path))
+            open_job = self._open_jobs.get(full)
+            if isinstance(open_job, dict):
+                open_job["project_code"] = code
+        self.log(
+            event="project_assign",
+            prompt_id=full,
+            project_code=code,
+            detail="set by %s" % (by_user or "admin"),
+        )
+        return {"prompt_id": full, "project_code": code, "updated": updated}
 
     def summary(
         self,

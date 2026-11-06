@@ -522,7 +522,7 @@
       <div id="tabLogs" class="hidden">
         <div class="card">
           <h2>Find job — who ran this?</h2>
-          <p class="hint">Paste a ComfyUI <b>prompt id / job id</b> from history. We show the person, group, IP, workflow, and time.</p>
+          <p class="hint">Paste a ComfyUI <b>prompt id / job id</b> from history. We show the person, group, IP, workflow, and time. A ticked user can attach a project code to that job.</p>
           <div class="row">
             <div style="flex:2 1 320px">
               <label>ComfyUI job / prompt id</label>
@@ -533,6 +533,17 @@
             </div>
           </div>
           <div id="jobWho"></div>
+          <div id="jobAssign" class="hidden" style="margin-top:12px">
+            <div class="row">
+              <div style="flex:1 1 220px">
+                <label>Project code for this job</label>
+                <input id="jobProject" type="text" placeholder="OIG_SYMU" style="margin:0" />
+              </div>
+              <div style="flex:0 0 auto;margin-bottom:0">
+                <button id="btnJobAssign" type="button">Add project code</button>
+              </div>
+            </div>
+          </div>
           <div id="jobMsg"></div>
         </div>
         <div class="card">
@@ -702,7 +713,8 @@
           <p class="hint">
             <b>admin</b> — full control (users, ACL, machines, logs).<br>
             <b>operator</b> — manage machines / enable ACL / logs (no user admin).<br>
-            <b>viewer</b> — read-only machines + logs + CSV export.
+            <b>viewer</b> — read-only machines + logs + CSV export.<br>
+            <b>Add project code</b> — tick a user so only that person can attach a project code on Find job. Unticked users cannot.
           </p>
           <div class="row">
             <div>
@@ -738,6 +750,7 @@
                   <th>Display</th>
                   <th>Role</th>
                   <th>Enabled</th>
+                  <th>Add project code</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -1123,6 +1136,7 @@
         ? "Access control ON — only enabled IPs"
         : "Access control OFF — open LAN";
       const u = st.user || {};
+      window.CAN_ASSIGN_PROJECT = !!(u.can_assign_project_code);
       $("whoAmI").textContent = (u.display_name || u.username || "—") + " (" + (u.role || "?") + ")";
       $("roleBadge").textContent = u.role || "role";
       $("tabUsersBtn").classList.toggle("hidden", !can("users.manage"));
@@ -1699,12 +1713,18 @@
               <span class="slider"></span>
             </label>
           </td>
+          <td>
+            <label class="switch" title="This user can attach a project code to a pasted job">
+              <input type="checkbox" class="tog-assign" data-id="${esc(u.id)}" data-user="${esc(u.username)}" ${u.can_assign_project_code ? "checked" : ""} />
+              <span class="slider"></span>
+            </label>
+          </td>
           <td class="actions">
             <button type="button" class="secondary btn-role" data-id="${esc(u.id)}" data-user="${esc(u.username)}" data-role="${esc(u.role)}">Change role</button>
             <button type="button" class="secondary btn-resetpw" data-id="${esc(u.id)}" data-user="${esc(u.username)}">Reset password</button>
             <button type="button" class="danger btn-deluser" data-id="${esc(u.id)}" data-user="${esc(u.username)}">Delete</button>
           </td>
-        </tr>`).join("") || `<tr><td colspan="5">No users</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="6">No users</td></tr>`;
         body.querySelectorAll(".tog-user").forEach((cb) => {
           cb.addEventListener("change", async () => {
             try {
@@ -1713,6 +1733,24 @@
                 body: JSON.stringify({ id: cb.dataset.id, username: cb.dataset.user, enabled: cb.checked }),
               });
               showMsg($("userMsg"), "Updated " + cb.dataset.user, true);
+            } catch (e) {
+              showMsg($("userMsg"), e.message, false);
+              loadUsers();
+            }
+          });
+        });
+        body.querySelectorAll(".tog-assign").forEach((cb) => {
+          cb.addEventListener("change", async () => {
+            try {
+              await api("/admin/api/users/update", {
+                method: "POST",
+                body: JSON.stringify({
+                  id: cb.dataset.id,
+                  username: cb.dataset.user,
+                  can_assign_project_code: cb.checked,
+                }),
+              });
+              showMsg($("userMsg"), (cb.checked ? "Can add project codes: " : "Cannot add project codes: ") + cb.dataset.user, true);
             } catch (e) {
               showMsg($("userMsg"), e.message, false);
               loadUsers();
@@ -2126,6 +2164,7 @@
         const box = $("jobWho");
         if (!data.found || !data.who) {
           box.innerHTML = "";
+          if ($("jobAssign")) $("jobAssign").classList.add("hidden");
           showMsg($("jobMsg"), "No match for that job id in the usage log", false);
           return;
         }
@@ -2138,8 +2177,14 @@
           <div class="stat"><div class="n">${esc(w.workflow || "—")}</div><div class="t">Workflow</div></div>
           <div class="stat"><div class="n">${esc(short ? fmtTimeShort(w.ts_iso) : (w.ts_iso || "").replace("T"," "))}</div><div class="t">When</div></div>
           <div class="stat"><div class="n">${w.runtime_sec != null ? esc(fmtSec(w.runtime_sec)) : "—"}</div><div class="t">Runtime</div></div>
+          <div class="stat"><div class="n">${esc(w.project_code || "—")}</div><div class="t">Project</div></div>
         </div>
         <p class="hint mono">prompt_id: ${esc(w.prompt_id || pid)} · ${data.count || 0} matching event(s)</p>`;
+        const assign = $("jobAssign");
+        if (assign) {
+          assign.classList.toggle("hidden", !window.CAN_ASSIGN_PROJECT);
+          if ($("jobProject")) $("jobProject").value = w.project_code || "";
+        }
         showMsg($("jobMsg"), "Matched " + (w.label || w.ip || "unknown") + " · " + (w.workflow || "workflow unknown"), true);
       } catch (e) {
         showMsg($("jobMsg"), e.message, false);
@@ -2151,6 +2196,25 @@
       loadLogs({ silent: false });
     };
     $("btnJobLookup").onclick = lookupJob;
+    if ($("btnJobAssign")) $("btnJobAssign").onclick = async () => {
+      const pid = ($("jobId").value || "").trim();
+      const code = ($("jobProject").value || "").trim();
+      if (!pid || !code) {
+        showMsg($("jobMsg"), "Paste the job id and a project code", false);
+        return;
+      }
+      try {
+        const data = await api("/admin/api/logs/assign_project", {
+          method: "POST",
+          body: JSON.stringify({ prompt_id: pid, project_code: code }),
+        });
+        if ($("jobProject")) $("jobProject").value = data.project_code || code;
+        showMsg($("jobMsg"), "Project code " + (data.project_code || code) + " saved on this job", true);
+        lookupJob();
+      } catch (e) {
+        showMsg($("jobMsg"), e.message, false);
+      }
+    };
     $("jobId").addEventListener("keydown", (e) => {
       if (e.key === "Enter") lookupJob();
     });
